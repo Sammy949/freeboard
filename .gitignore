@@ -56,5 +56,8 @@ temp/
 # Midnight network state (per-network seeds, deploy addresses)
 .midnight-state.json
 
+# Attester signing key (mock oracle — still a secret; see src/attester.ts)
+.midnight-attester.json
+
 # Midnight wallet sync state (per-network serialized wallet state cache)
 .midnight-wallet-state/
