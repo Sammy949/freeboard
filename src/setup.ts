@@ -20,15 +20,17 @@ async function main(): Promise<void> {
 
   process.stdout.write(`\n→ Setting up freeboard on network: ${network}\n\n`);
 
-  // 1. Bring up only the services this network needs.
-  run('docker', ['compose', 'up', '-d', '--wait', ...config.composeServices]);
+  // 1. Bring up only the services this network needs, from the compose file
+  //    that network's stack lives in (the ledger-8 and ledger-9 devnets are
+  //    separate files with separate ports).
+  run('docker', ['compose', '-f', config.composeFile, 'up', '-d', '--wait', ...config.composeServices]);
 
   // 2. Compile the contract (network-agnostic).
   run('npm', ['run', 'compile']);
 
-  // 3. Deploy. Forward --network so deploy.ts sees the same network.
-  const deployArgs = network === 'undeployed' ? [] : ['--', '--network', network];
-  run('npm', ['run', 'deploy', ...deployArgs]);
+  // 3. Deploy. Always forward --network so deploy.ts resolves the same network
+  //    rather than falling back to its own default.
+  run('npm', ['run', 'deploy', '--', '--network', network]);
 }
 
 main().catch((e) => {

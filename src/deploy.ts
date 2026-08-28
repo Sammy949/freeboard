@@ -6,7 +6,7 @@
  */
 import * as fs from 'node:fs';
 import * as path from 'node:path';
-import { resolveNetwork, getOrCreateWallet, formatWalletBackupNotice, recordDeployment } from './network';
+import { resolveNetwork, getOrCreateWallet, formatWalletBackupNotice, recordDeployment, isLocalDevnet } from './network';
 import { createWallet, persistWalletState, unshieldedToken, type WalletContext } from './wallet';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { WebSocket } from 'ws';
@@ -166,10 +166,11 @@ async function main() {
   console.log(`\n  Wallet Address: ${address}`);
   console.log(`  Balance: ${balance.toLocaleString()} tNight\n`);
 
-  if (network === 'undeployed' && balance === 0n) {
+  if (isLocalDevnet(network) && balance === 0n) {
     console.error(
       '\n❌ Genesis-seed wallet has zero NIGHT. The devnet preset may not have minted to it.\n' +
-        '   Check `docker compose ps` and `docker compose logs node`. Then `docker compose down -v` and retry.\n',
+        `   Check \`docker compose -f ${networkConfig.composeFile} ps\` and \`... logs node\`.\n` +
+        `   Then \`docker compose -f ${networkConfig.composeFile} down -v\` and retry.\n`,
     );
     await walletCtx.wallet.stop();
     process.exit(1);
@@ -179,7 +180,7 @@ async function main() {
   // funds the address from the network's faucet. The display balance is
   // authoritative here (unlike DUST, tNIGHT shows up immediately once the
   // faucet tx lands).
-  if (network !== 'undeployed' && networkConfig.faucet) {
+  if (!isLocalDevnet(network) && networkConfig.faucet) {
     // Same balance idiom used by check-balance.ts:
     //   state.unshielded.balances[unshieldedToken().raw] ?? 0n
     const initialBalance = await Rx.firstValueFrom(walletCtx.wallet.state().pipe(

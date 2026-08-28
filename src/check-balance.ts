@@ -4,7 +4,7 @@
 import { WebSocket } from 'ws';
 
 // Midnight SDK imports
-import { resolveNetwork, getOrCreateWallet, formatWalletBackupNotice } from './network';
+import { resolveNetwork, getOrCreateWallet, formatWalletBackupNotice, isLocalDevnet } from './network';
 // unshieldedToken is re-exported from ./wallet (originally @midnight-ntwrk/midnight-js-protocol/ledger).
 import { createWallet, persistWalletState, unshieldedToken } from './wallet';
 
@@ -62,7 +62,7 @@ async function main() {
     console.log(`  DUST:   ${dustBalance.toLocaleString()}\n`);
 
     if (tNightBalance === 0n) {
-      if (network === 'undeployed') {
+      if (isLocalDevnet(network)) {
         console.log('  ⚠ Wallet has no tNight. Make sure the local devnet is running');
         console.log('     (npm run setup) — the genesis seed is pre-funded by the dev preset.\n');
       } else if (networkConfig.faucet) {

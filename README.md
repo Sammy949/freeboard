@@ -108,29 +108,33 @@ npm run test:e2e
 
 `npm run setup` runs end-to-end with no prompts:
 
-1. `docker compose up -d --wait` — starts a local Midnight devnet (node, indexer, proof-server) and blocks until all three pass their healthchecks.
-2. `npm run compile` — compiles `contracts/hello-world.compact` to `contracts/managed/hello-world/`.
+1. `docker compose -f <network's compose file> up -d --wait` — starts a local Midnight devnet (node, indexer, proof-server) and blocks until all three pass their healthchecks.
+2. `npm run compile` — compiles `contracts/freeboard.compact` to `contracts/managed/freeboard/`.
 3. `npm run deploy` — derives the genesis-seed wallet (NIGHT pre-minted), registers UTXOs for DUST generation, deploys the contract, writes `.midnight-state.json`.
 
 `npm run test:e2e` reconnects to the deployed contract and reads its ledger state. Exits 0 if the contract is live and indexable.
 
-## Local devnet
+## Local devnets
 
-The project ships its own devnet via `docker-compose.yml`:
+Two stacks ship with the project. Ports differ so both can run at once.
 
-| Service        | Port | Purpose                                         |
-| -------------- | ---- | ----------------------------------------------- |
-| `node`         | 9944 | Midnight node, `dev` chain preset               |
-| `indexer`      | 8088 | GraphQL indexer for chain state                 |
-| `proof-server` | 6300 | Generates ZK proofs for contract transactions   |
+| Service        | ledger-9 (`docker-compose.ledger9.yml`) | ledger-8 (`docker-compose.yml`) |
+| -------------- | --------------------------------------- | ------------------------------- |
+| `node`         | 19944                                   | 9944                            |
+| `indexer`      | 18088                                   | 8088                            |
+| `proof-server` | 16300                                   | 6300                            |
 
-State lives in container-managed volumes. Tear everything down with:
+The ledger-9 stack is the one Freeboard needs. Shortcuts:
 
 ```bash
-docker compose down -v
+npm run devnet:start     # ledger-9 stack, waits for healthy
+npm run devnet:stop
+npm run devnet:clean     # also drops volumes
 ```
 
-That removes all containers, networks, and volumes. The next `npm run setup` starts from a clean slate.
+State lives in container-managed volumes. `devnet:clean` (or `docker compose
+-f <file> down -v`) removes all containers, networks, and volumes, so the next
+`npm run setup` starts from a clean slate.
 
 ## ⚠️ LOCAL DEVNET ONLY
 
@@ -142,18 +146,25 @@ funds at this seed.
 
 ## Networks
 
-This DApp supports three networks:
+Four networks. Note there are **two local devnets** — they run different ledger
+versions, so which one you want depends on which compiler built your contract.
 
 | Network | When to use | Default? |
 |---|---|---|
-| `undeployed` | Local devnet bundled in `docker-compose.yml`. Genesis seed is hardcoded; no funding needed. | yes |
+| `undeployed-l9` | Ledger-9 devnet (`docker-compose.ledger9.yml`, ports +10000). What compiler 0.34.0 targets, so this is where Freeboard deploys. Genesis seed, no funding needed. | yes |
+| `undeployed` | Ledger-8 devnet (`docker-compose.yml`). The combination upstream actually tests, but it **cannot run a 0.34.0-compiled contract**. Kept as the known-good fallback. | |
 | `preview` | Public preview testnet. Faucet at `https://midnight-tmnight-preview.nethermind.dev`. |  |
 | `preprod` | Public preprod testnet. Faucet at `https://midnight-tmnight-preprod.nethermind.dev`. |  |
+
+The two devnets are separate networks rather than one with a switch, because
+they are genuinely different chains: each keeps its own deploy record and wallet
+sync cache, and a contract address from one means nothing on the other. Both
+speak the `undeployed` protocol network id on the wire.
 
 The active network is **sticky**: whichever network you last interacted
 with stays active until you switch. Any command run with `--network <name>`
 also sets that network active for subsequent commands. The default on a
-fresh project is `undeployed` (local devnet).
+fresh project is `undeployed-l9`.
 
 ```sh
 npm run setup -- --network preview   # runs on preview AND makes it active
@@ -166,12 +177,12 @@ You can also switch without running anything else:
 ```sh
 npm run network preview         # active network is now preview
 npm run network                 # prints current active network
-npm run network undeployed      # switch back to local devnet
+npm run network undeployed-l9   # switch back to the ledger-9 devnet
 ```
 
 ### How wallets work across networks
 
-- `undeployed` uses a hardcoded genesis seed. Local devnet pre-funds it.
+- Both devnets use a hardcoded genesis seed, pre-funded by the `dev` preset.
 - `preview` and `preprod` generate a fresh wallet on first use: a 24-word
   BIP-39 recovery phrase (printed once) plus its derived seed, both stored
   in `.midnight-state.json` (gitignored). The wallet survives switching
@@ -238,7 +249,7 @@ service for the deploy hot path.
 ### Switching back to local devnet
 
 ```sh
-npm run network undeployed     # or: npm run setup -- --network undeployed
+npm run network undeployed-l9  # or: npm run setup -- --network undeployed-l9
 ```
 
 Your preview/preprod wallet seeds and deploy addresses stay in

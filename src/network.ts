@@ -11,17 +11,40 @@ import { fileURLToPath } from 'node:url';
 import { generateMnemonic, mnemonicToSeedSync, validateMnemonic } from '@scure/bip39';
 import { wordlist } from '@scure/bip39/wordlists/english.js';
 
-export type NetworkId = 'undeployed' | 'preview' | 'preprod';
+// Network keys. `undeployed` and `undeployed-l9` are BOTH local devnets and
+// both speak the 'undeployed' protocol network id — they differ only in which
+// ledger version the chain runs, and therefore in ports and compose file. They
+// are separate keys (not one key with a flag) so each keeps its own deploy
+// record and wallet sync cache: they are genuinely different chains, and a
+// contract address from one is meaningless on the other.
+export type NetworkId = 'undeployed' | 'undeployed-l9' | 'preview' | 'preprod';
 
-export const NETWORK_IDS: readonly NetworkId[] = ['undeployed', 'preview', 'preprod'] as const;
+export const NETWORK_IDS: readonly NetworkId[] = ['undeployed', 'undeployed-l9', 'preview', 'preprod'] as const;
+
+/**
+ * True for the bundled local devnets, which are pre-funded from the genesis
+ * seed and have no faucet. Prefer this over `=== 'undeployed'` so the l9 devnet
+ * is not silently treated as a public network.
+ */
+export function isLocalDevnet(network: NetworkId): boolean {
+  return network === 'undeployed' || network === 'undeployed-l9';
+}
 
 export interface NetworkConfig {
+  /**
+   * The PROTOCOL network id handed to setNetworkId — it drives address encoding
+   * and must match what the chain and indexer use. Deliberately not always the
+   * same as the network key: both local devnets are keyed separately but are
+   * 'undeployed' on the wire.
+   */
   networkId: NetworkId;
   indexer: string;
   indexerWS: string;
   node: string;
   proofServer: string;
   faucet: string | null;
+  /** Compose file to bring services up from. */
+  composeFile: string;
   composeServices: string[];
 }
 
@@ -49,6 +72,9 @@ export const STATE_FILE_NAME = '.midnight-state.json';
 export const STATE_VERSION = 1 as const;
 
 export const NETWORK_CONFIGS: Record<NetworkId, NetworkConfig> = {
+  // Ledger-8 devnet. The combination upstream actually tests, and the only one
+  // that works with a 0.31.x-compiled contract. Kept as the known-good
+  // fallback; it CANNOT run contracts built by compiler 0.34.0 (ledger 9).
   undeployed: {
     networkId: 'undeployed',
     indexer:   'http://127.0.0.1:8088/api/v4/graphql',
@@ -56,6 +82,23 @@ export const NETWORK_CONFIGS: Record<NetworkId, NetworkConfig> = {
     node:      'ws://127.0.0.1:9944',
     proofServer: 'http://127.0.0.1:6300',
     faucet: null,
+    composeFile: 'docker-compose.yml',
+    composeServices: ['node', 'indexer', 'proof-server'],
+  },
+  // Ledger-9 devnet — what compiler 0.34.0 targets, so this is where Freeboard
+  // actually deploys. Ports are offset +10000 from the ledger-8 stack so both
+  // can run at once. Protocol network id is still 'undeployed'; the chain does
+  // not know or care about our key for it. Every image is a pre-release we
+  // selected ourselves (upstream publishes no ledger-9 matrix) — see
+  // docker-compose.ledger9.yml and notes/03.
+  'undeployed-l9': {
+    networkId: 'undeployed',
+    indexer:   'http://127.0.0.1:18088/api/v4/graphql',
+    indexerWS: 'ws://127.0.0.1:18088/api/v4/graphql/ws',
+    node:      'ws://127.0.0.1:19944',
+    proofServer: 'http://127.0.0.1:16300',
+    faucet: null,
+    composeFile: 'docker-compose.ledger9.yml',
     composeServices: ['node', 'indexer', 'proof-server'],
   },
   preview: {
@@ -65,6 +108,7 @@ export const NETWORK_CONFIGS: Record<NetworkId, NetworkConfig> = {
     node:      'https://rpc.preview.midnight.network',
     proofServer: 'http://127.0.0.1:6300',
     faucet: 'https://midnight-tmnight-preview.nethermind.dev',
+    composeFile: 'docker-compose.yml',
     composeServices: ['proof-server'],
   },
   preprod: {
@@ -74,6 +118,7 @@ export const NETWORK_CONFIGS: Record<NetworkId, NetworkConfig> = {
     node:      'https://rpc.preprod.midnight.network',
     proofServer: 'http://127.0.0.1:6300',
     faucet: 'https://midnight-tmnight-preprod.nethermind.dev',
+    composeFile: 'docker-compose.yml',
     composeServices: ['proof-server'],
   },
 };
@@ -197,7 +242,10 @@ export function resolveNetwork(opts: ResolveOptions = {}): ResolveResult {
       network = state.activeNetwork;
       source = 'state';
     } else {
-      network = 'undeployed';
+      // Default to the ledger-9 devnet: it is the one that matches the Compact
+      // compiler Freeboard is built with, so a fresh checkout lands on a stack
+      // that can actually deploy the contract.
+      network = 'undeployed-l9';
       source = 'default';
     }
   }
@@ -260,7 +308,7 @@ export function getOrCreateWallet(network: NetworkId, opts: SeedOptions = {}): W
   const env = opts.env ?? process.env;
   const cwd = opts.cwd ?? process.cwd();
 
-  if (network === 'undeployed') return { seed: GENESIS_SEED, mnemonic: null, created: false };
+  if (isLocalDevnet(network)) return { seed: GENESIS_SEED, mnemonic: null, created: false };
 
   const envSeed = env.MIDNIGHT_WALLET_SEED;
   const envMnemonic = env.MIDNIGHT_WALLET_MNEMONIC;
@@ -412,7 +460,7 @@ function cliMain(argv: string[]): number {
   }
   setActiveNetwork(candidate);
   process.stdout.write(`Active network is now: ${candidate}\n`);
-  if (candidate !== 'undeployed') {
+  if (!isLocalDevnet(candidate)) {
     const seed = loadState()?.wallets?.[candidate]?.seed;
     if (!seed) {
       process.stdout.write(`Wallet not yet generated — run \`npm run setup\` to fund and deploy.\n`);
