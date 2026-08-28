@@ -1,0 +1,95 @@
+# Local Midnight devnet for freeboard — LEDGER 9 (experimental)
+#
+# WHY THIS FILE EXISTS
+# Compiler 0.34.0 reports `--ledger-version ledger-9.1.0.0-rc.3`, so a contract
+# built by it cannot deploy onto the ledger-8 stack in docker-compose.yml (node
+# 1.0.0 / indexer 4.3.3 / proof-server 8.1.0). This is the ledger-9 counterpart.
+#
+# ⚠ UNTESTED BY UPSTREAM. The official support matrix
+# (docs.midnight.network/relnotes/support-matrix, read 2026-08-28) has NO
+# ledger-9 row — it lists toolchain 0.31.1 / runtime 0.16.0 / Midnight.js 4.1.1
+# against the ledger-8 images. Every version below is a pre-release we selected
+# ourselves. Keep docker-compose.yml as the known-good ledger-8 fallback.
+#
+# LOCAL DEVELOPMENT ONLY — do not expose these ports to a public network.
+# Ports are offset by +10000 from the ledger-8 stack so both can coexist.
+# Up:   docker compose -f docker-compose.ledger9.yml up -d --wait
+# Down: docker compose -f docker-compose.ledger9.yml down -v
+name: freeboard-devnet-l9
+
+services:
+  node:
+    # 2.1.0-beta.1 is the node-2 line that carries ledger 9. Smoke-tested
+    # standalone on 2026-08-28: boots on CFG_PRESET=dev, produces and finalizes
+    # blocks, reports system_version 2.1.0-4a9eda5d / specVersion 2001000.
+    image: midnightntwrk/midnight-node:2.1.0-beta.1
+    container_name: freeboard-l9-node
+    ports:
+      - "19944:9944"
+    environment:
+      CFG_PRESET: "dev"
+      SIDECHAIN_BLOCK_BENEFICIARY: "04bcf7ad3be7a5c790460be82a713af570f22e0f801f6659ab8e84a52be6969e"
+    # Healthy means "producing blocks", not just "HTTP up": the probe asks for
+    # the hash of block 1 and fails until it exists, because the indexer's SPO
+    # component exits 1 if it connects while the chain is still at genesis.
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "curl -sf -H 'Content-Type: application/json' -d '{\"id\":1,\"jsonrpc\":\"2.0\",\"method\":\"chain_getBlockHash\",\"params\":[1]}' http://localhost:9944 | grep -q '\"result\":\"0x'",
+        ]
+      interval: 2s
+      timeout: 5s
+      retries: 45
+      start_period: 20s
+
+  indexer:
+    # 4.4.0-rc.2 is the ledger-9/node-2 indexer line. The warning in
+    # docker-compose.yml against 4.4.0 tags still stands for the ledger-8 stack;
+    # here it is the whole point. Env keys carried over from 4.3.3 (including the
+    # dummy Blockfrost id the SPO config loader hard-requires) — if 4.4.x renamed
+    # any APP__* key this container is where it will surface.
+    image: midnightntwrk/indexer-standalone:4.4.0-rc.2
+    container_name: freeboard-l9-indexer
+    restart: on-failure
+    ports:
+      - "18088:8088"
+    environment:
+      RUST_LOG: "indexer=info,chain_indexer=info,indexer_api=info,wallet_indexer=info,indexer_common=info,fastrace_opentelemetry=off,info"
+      APP__APPLICATION__NETWORK_ID: "undeployed"
+      APP__INFRA__NODE__URL: "ws://node:9944"
+      APP__INFRA__STORAGE__PASSWORD: "indexer"
+      APP__INFRA__PUB_SUB__PASSWORD: "indexer"
+      APP__INFRA__LEDGER_STATE_STORAGE__PASSWORD: "indexer"
+      APP__INFRA__SECRET: "303132333435363738393031323334353637383930313233343536373839303132"
+      APP__INFRA__SPO_NODE__URL: "ws://node:9944"
+      APP__INFRA__SPO_NODE__BLOCKFROST_ID: "local-devnet-dummy-id"
+    healthcheck:
+      test: ["CMD-SHELL", "cat /var/run/indexer-standalone/running"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 10s
+    depends_on:
+      node:
+        condition: service_healthy
+
+  proof-server:
+    # 9.0.0-rc.6 is the ledger-9 proof server. Note 9.0.0-rc.7 exists ONLY as
+    # arch-suffixed tags (-amd64/-arm64) with no multi-arch manifest, so a plain
+    # `docker pull ...:9.0.0-rc.7` fails "not found" — rc.6 is the newest
+    # pullable tag. Distroless image: the /dev/tcp healthcheck works because
+    # CMD-SHELL invokes /bin/sh directly (no curl/wget in the image).
+    image: midnightntwrk/proof-server:9.0.0-rc.6
+    container_name: freeboard-l9-proof-server
+    command: ["midnight-proof-server -v"]
+    ports:
+      - "16300:6300"
+    environment:
+      RUST_BACKTRACE: "full"
+    healthcheck:
+      test: ["CMD-SHELL", "echo > /dev/tcp/127.0.0.1/6300"]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+      start_period: 10s
