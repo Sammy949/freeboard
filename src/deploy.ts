@@ -233,7 +233,10 @@ async function main() {
     const recipe = await walletCtx.wallet.registerNightUtxosForDustGeneration(
       unregisteredUtxos,
       walletCtx.unshieldedKeystore.getPublicKey(),
-      (payload) => walletCtx.unshieldedKeystore.signData(payload),
+      // wallet-sdk 2.x's SignSegment is async ((data) => Promise<Signature>).
+      // The keystore ships signDataAsync exactly for this callback shape, so
+      // pass it rather than the synchronous signData.
+      (payload) => walletCtx.unshieldedKeystore.signDataAsync(payload),
     );
     const finalized = await walletCtx.wallet.finalizeRecipe(recipe);
     await walletCtx.wallet.submitTransaction(finalized);

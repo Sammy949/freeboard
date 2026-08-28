@@ -2,7 +2,7 @@
   "name": "freeboard",
   "version": "1.0.0",
   "type": "module",
-  "description": "A Midnight Network application created with create-mn-app",
+  "description": "Prove a DeFi position is solvent without revealing it — zero-knowledge solvency proofs on Midnight",
   "author": "",
   "license": "MIT",
   "scripts": {
@@ -13,6 +13,9 @@
     "cli": "npx tsx src/cli.ts",
     "check-balance": "npx tsx src/check-balance.ts",
     "network": "npx tsx src/network.ts",
+    "devnet:start": "docker compose -f docker-compose.ledger9.yml up -d --wait",
+    "devnet:stop": "docker compose -f docker-compose.ledger9.yml down",
+    "devnet:clean": "docker compose -f docker-compose.ledger9.yml down -v",
     "proof-server:start": "docker compose up -d",
     "proof-server:stop": "docker compose down",
     "clean": "rm -rf contracts/managed .midnight-state.json .midnight-wallet-state",
@@ -20,17 +23,17 @@
     "test:e2e": "tsx scripts/e2e-check.ts"
   },
   "dependencies": {
-    "@midnight-ntwrk/compact-runtime": "0.19.0",
-    "@midnight-ntwrk/midnight-js-contracts": "4.1.1",
-    "@midnight-ntwrk/midnight-js-http-client-proof-provider": "4.1.1",
-    "@midnight-ntwrk/midnight-js-indexer-public-data-provider": "4.1.1",
-    "@midnight-ntwrk/midnight-js-level-private-state-provider": "4.1.1",
-    "@midnight-ntwrk/midnight-js-network-id": "4.1.1",
-    "@midnight-ntwrk/midnight-js-node-zk-config-provider": "4.1.1",
-    "@midnight-ntwrk/midnight-js-protocol": "4.1.1",
-    "@midnight-ntwrk/midnight-js-types": "4.1.1",
-    "@midnight-ntwrk/midnight-js-utils": "4.1.1",
-    "@midnight-ntwrk/wallet-sdk": "1.2.0",
+    "@midnight-ntwrk/compact-runtime": "0.19.0-rc.0",
+    "@midnight-ntwrk/midnight-js-contracts": "5.0.0-beta.7",
+    "@midnight-ntwrk/midnight-js-http-client-proof-provider": "5.0.0-beta.7",
+    "@midnight-ntwrk/midnight-js-indexer-public-data-provider": "5.0.0-beta.7",
+    "@midnight-ntwrk/midnight-js-level-private-state-provider": "5.0.0-beta.7",
+    "@midnight-ntwrk/midnight-js-network-id": "5.0.0-beta.7",
+    "@midnight-ntwrk/midnight-js-node-zk-config-provider": "5.0.0-beta.7",
+    "@midnight-ntwrk/midnight-js-protocol": "5.0.0-beta.7",
+    "@midnight-ntwrk/midnight-js-types": "5.0.0-beta.7",
+    "@midnight-ntwrk/midnight-js-utils": "5.0.0-beta.7",
+    "@midnight-ntwrk/wallet-sdk": "2.0.0-beta.2",
     "@scure/bip39": "2.2.0",
     "rxjs": "^7.8.2",
     "ws": "^8.21.1"
@@ -45,7 +48,7 @@
     "node": ">=22.0.0"
   },
   "overrides": {
-    "@midnight-ntwrk/compact-runtime": "0.19.0"
+    "@midnight-ntwrk/wallet-sdk-utilities": "1.2.1"
   },
   "keywords": ["midnight", "blockchain", "zero-knowledge", "privacy"]
 }

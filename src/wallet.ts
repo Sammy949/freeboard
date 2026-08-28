@@ -96,12 +96,17 @@ export async function createWallet(opts: CreateWalletOptions): Promise<WalletCon
   const networkId = getNetworkId();
   const shieldedSecretKeys = ledger.ZswapSecretKeys.fromSeed(keys[Roles.Zswap]);
   const dustSecretKey = ledger.DustSecretKey.fromSeed(keys[Roles.Dust]);
-  const unshieldedKeystore = createKeystore(keys[Roles.NightExternal], networkId);
+  // wallet-sdk 2.x takes a tagged UnshieldedSecretKey instead of a bare
+  // Uint8Array, because ledger 9 supports two signature schemes ('schnorr' |
+  // 'ecdsa') and the keystore has to know which one it holds — the scheme is
+  // baked into the derived address and enforced at signature-provision time.
+  // 'schnorr' is the NightExternal role's scheme (Roles.EcdsaUnshielded is the
+  // separate ecdsa path), and matches what the SDK's own V1Builder uses.
+  const unshieldedKeystore = createKeystore({ kind: 'schnorr', secret: keys[Roles.NightExternal] }, networkId);
 
   const saved: PersistedWalletState = opts.restore === false
     ? {}
     : loadWalletState(opts.network, { cwd: opts.cwd });
-
   const restored = { shielded: false, unshielded: false, dust: false };
 
   const walletConfig = {
