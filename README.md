@@ -1,6 +1,100 @@
-# freeboard
+# Freeboard
 
-A Midnight Network smart contract scaffolded with create-mn-app.
+**Prove your DeFi position is solvent without revealing it.**
+
+A lender, an OTC desk or a counterparty wants to know your loan is not about to
+be liquidated. Today the only way to show them is to hand over your position —
+collateral, debt, the whole book. Freeboard replaces that with a zero-knowledge
+proof on [Midnight](https://midnight.network): the circuit computes your
+Aave-style health factor privately and discloses exactly one bit — **SAFE** or
+**AT_RISK** — against a threshold the verifier chooses.
+
+The numbers never leave your machine. The verdict is all that goes on-chain.
+
+## Why this isn't security theater
+
+A circuit over self-reported numbers proves only that you can do arithmetic. It
+says nothing about whether the position is real, so it is worth nothing to a
+counterparty.
+
+So the position must arrive **signed by an attester**, and Freeboard verifies
+that signature *inside the circuit*, before the health-factor math runs. The
+verdict is therefore bound to a position an oracle actually observed. The
+attester's public key is fixed at deployment and there is deliberately no
+circuit to change it — an unauthenticated rotate would let a prover install
+their own key and attest to their own numbers, which is the exact hole this
+closes.
+
+Signature scheme is Schnorr over JubJub, straight from the Compact standard
+library. The signed payload is `[collateral, debt, liquidationThresholdBps,
+asOf]`; `asOf` sits inside the signature, so an attestation cannot be
+re-stamped and replayed forward.
+
+## The math
+
+Aave's health factor is `HF = (collateral × liquidationThreshold) / debt`.
+Compact is integer-only and division is to be avoided, so checking `HF ≥ T`
+becomes a cross-multiplication — with both sides in basis points the 10000s
+cancel:
+
+```
+collateral × liquidationThresholdBps  ≥  minHealthFactorBps × debt
+```
+
+No division, no precision loss. `debt == 0` is an infinite health factor, so
+trivially safe. The verdict enum is ordered `{ at_risk, safe }` so that the
+default ledger value of `0` means **at_risk** — you are at risk until a proof
+says otherwise.
+
+## Status
+
+Early, and honest about it.
+
+- ✅ **The contract works.** `contracts/freeboard.compact` compiles against
+  Compact 0.34.0 with proving and verifier keys emitted, including the
+  in-circuit Schnorr check.
+- ✅ **A ledger-9 devnet boots.** `docker-compose.ledger9.yml`, all services
+  healthy.
+- 🚧 **Deploy and CLI are not ported yet.** `src/` is still the generated
+  hello-world plumbing. It cannot deploy Freeboard as it stands.
+
+Compiling the contract needs only the Compact compiler — no npm SDK:
+
+```bash
+npm run compile     # -> contracts/managed/freeboard/{contract,keys,zkir}
+```
+
+There is a version story behind that 🚧, and it is not a small one: every
+installable Compact compiler emits runtime 0.19.x, while the current stable SDK
+hard-pins 0.16.0. Freeboard therefore runs the 5.0.0-beta SDK deliberately.
+`notes/03-midnight-toolchain.md` has the full investigation.
+
+## Repo layout
+
+```
+freeboard/
+├── contracts/
+│   └── freeboard.compact           # the contract — this is the product
+├── notes/                          # design + research, written as we go
+│   ├── 01-concept-and-pitch.md
+│   ├── 02-architecture.md
+│   ├── 03-midnight-toolchain.md    # version skew, the beta-SDK decision
+│   └── 04-roadmap-and-open-questions.md
+├── src/                            # deploy/CLI plumbing (still hello-world)
+├── docker-compose.yml              # ledger-8 devnet (known good)
+└── docker-compose.ledger9.yml      # ledger-9 devnet (what 0.34.0 needs)
+```
+
+Built for Midnight Wave 1. The contract is the product; the CLI comes with it;
+a web dashboard is the demo skin.
+
+---
+
+# Scaffold documentation
+
+Everything below documents the `create-mn-app` plumbing in `src/`, which still
+targets the hello-world contract. It is accurate for that scaffold and is kept
+as the reference for the port.
 
 ## Quick start
 
