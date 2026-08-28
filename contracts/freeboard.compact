@@ -1,0 +1,120 @@
+pragma language_version >= 0.23;
+
+import CompactStandardLibrary;
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Freeboard — private solvency proofs (v2)
+//
+// A prover feeds a DeFi position (collateral, debt, liquidation threshold) as
+// PRIVATE witnesses. The circuit computes the Aave-style health factor in the
+// private domain and discloses ONLY a coarse verdict — SAFE or AT_RISK —
+// against a verifier-chosen minimum health factor. The underlying numbers
+// never cross the private boundary.
+//
+// v1 = health-factor → verdict.
+// v2 = the anti-theater part: the position must carry a Schnorr signature from
+// the attester registered at deployment, verified IN-CIRCUIT before the health
+// factor is computed. The verdict therefore binds to a position an oracle
+// actually observed, not to numbers the prover made up.
+// See notes/02-architecture.md.
+// ─────────────────────────────────────────────────────────────────────────────
+
+// Ordered so the uninitialized/default ledger value (0) is the conservative
+// one: you are AT_RISK until a check proves otherwise.
+export enum Verdict { at_risk, safe }
+
+// ─── Public state ─────────────────────────────────────────────────────────────
+
+// The attester's Schnorr verifying key over JubJub, fixed at deployment. There
+// is deliberately NO register/rotate circuit: an unauthenticated one would let
+// a prover install their own key and self-attest, which would turn the whole
+// check back into theater. Rotation is a redeploy until there is a real
+// authority model (notes/04, open question 1).
+export ledger attesterPk: JubjubPoint;
+
+// The most recent verdict rendered by the contract — never the position that
+// produced it.
+export ledger lastVerdict: Verdict;
+
+// The attester's observation stamp for the position behind `lastVerdict`. Public
+// so a verifier can judge freshness; carries no position data.
+export ledger lastAttestationAt: Uint<64>;
+
+// Monotonic count of solvency checks performed. Public, carries no position data.
+export ledger checkCount: Counter;
+
+// The attester key is a deployment parameter, not something a circuit can set.
+constructor(pk: JubjubPoint) {
+    attesterPk = disclose(pk);
+}
+
+// ─── The attested position (private; never disclosed) ─────────────────────────
+//
+// All values pre-scaled to a common base unit. liquidationThresholdBps is in
+// basis points (e.g. 8500 = 85%). The Uint bounds are enforced by the types
+// themselves, which is what keeps a malicious prover from supplying
+// out-of-range values.
+//
+// `asOf` is the attester's observation stamp (block height or unix seconds — one
+// convention, fixed by the attester). It is inside the SIGNED payload, so it
+// cannot be re-stamped without invalidating the signature; the contract mirrors
+// it to `lastAttestationAt` so freshness is checkable. In-circuit enforcement of
+// a freshness floor is v2.1 (notes/04).
+struct Position {
+    collateral: Uint<64>,
+    debt: Uint<64>,
+    liquidationThresholdBps: Uint<16>,
+    asOf: Uint<64>,
+}
+
+witness getPosition(): Position;
+witness getAttestation(): JubjubSchnorrSignature;
+
+// The exact message the attester signs. This field order is the wire contract
+// between the off-circuit signer (stdlib `jubjubSchnorrSign`) and this circuit;
+// any divergence simply fails verification.
+circuit attestationMessage(p: Position): Vector<4, Field> {
+    return [
+        p.collateral as Field,
+        p.debt as Field,
+        p.liquidationThresholdBps as Field,
+        p.asOf as Field
+    ];
+}
+
+// ─── The one entry point ──────────────────────────────────────────────────────
+//
+// minHealthFactorBps is PUBLIC, chosen by the verifier (e.g. 15000 = HF ≥ 1.5).
+//
+// Aave: HF = (collateral * liqThresholdBps/10000) / debt. Checking HF ≥ minHF
+// (both in bps) reduces — the 10000s cancel — to the division-free comparison:
+//
+//     collateral * liqThresholdBps  ≥  minHealthFactorBps * debt
+//
+// Integer-only, no precision loss, no division. debt == 0 means no borrow, i.e.
+// an infinite health factor → trivially SAFE.
+export circuit checkSolvency(minHealthFactorBps: Uint<32>): Verdict {
+    const position = getPosition();
+    const attestation = getAttestation();
+
+    // Anti-theater gate. Runs BEFORE the health-factor math: an unattested
+    // position yields no verdict at all, rather than a verdict nobody should
+    // trust.
+    assert(
+        jubjubSchnorrVerify<4>(attestationMessage(position), attestation, attesterPk),
+        "position is not signed by the registered attester"
+    );
+
+    const safe =
+        position.debt == 0
+        || position.collateral * position.liquidationThresholdBps
+           >= minHealthFactorBps * position.debt;
+
+    const verdict = safe ? Verdict.safe : Verdict.at_risk;
+
+    lastVerdict = disclose(verdict);
+    lastAttestationAt = disclose(position.asOf);
+    checkCount.increment(1);
+
+    return disclose(verdict);
+}
