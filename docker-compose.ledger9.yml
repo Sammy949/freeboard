@@ -11,6 +11,11 @@
 # against the ledger-8 images. Every version below is a pre-release we selected
 # ourselves. Keep docker-compose.yml as the known-good ledger-8 fallback.
 #
+# THE PIN THAT MATTERS: ledger 9.1.0.0-rc.3, held identical across all three of
+# the compiler, the SDK, and the node. See the node service comment — a rc.4 node
+# rejects rc.3-shaped transactions at submission, and the error names dust, not
+# versions.
+#
 # LOCAL DEVELOPMENT ONLY — do not expose these ports to a public network.
 # Ports are offset by +10000 from the ledger-8 stack so both can coexist.
 # Up:   docker compose -f docker-compose.ledger9.yml up -d --wait
@@ -19,10 +24,20 @@ name: freeboard-devnet-l9
 
 services:
   node:
-    # 2.1.0-beta.1 is the node-2 line that carries ledger 9. Smoke-tested
-    # standalone on 2026-08-28: boots on CFG_PRESET=dev, produces and finalizes
-    # blocks, reports system_version 2.1.0-4a9eda5d / specVersion 2001000.
-    image: midnightntwrk/midnight-node:2.1.0-beta.1
+    # ⚠ THE LEDGER PATCH VERSION MATTERS — "ledger 9" is not one thing.
+    #
+    # 2.0.0-rc.4 pins midnight-ledger 9.1.0.0-rc.3, which is exactly what
+    # compiler 0.34.0 targets (`compact --ledger-version`) and what the beta SDK
+    # pins (@midnightntwrk/ledger-v9 1.0.0-rc.3).
+    #
+    # Do NOT "upgrade" to node 2.1.0-beta.1 without moving the SDK too: it pins
+    # ledger 9.1.0.0-rc.4 (state encoding v17 → v18, revised cost-model factors,
+    # transaction_version 3 → 4). Tried, and it fails at submission with
+    # `Invalid Transaction: Custom error: 170` =
+    # MalformedError::InvalidDustSpendProof — the wallet builds a dust spend proof
+    # under rc.3 rules that an rc.4 node refuses. Everything upstream of
+    # submission succeeds, so the failure looks unrelated to versions; it is not.
+    image: midnightntwrk/midnight-node:${MIDNIGHT_NODE_IMAGE_TAG:-2.0.0-rc.4}
     container_name: freeboard-l9-node
     ports:
       - "19944:9944"
