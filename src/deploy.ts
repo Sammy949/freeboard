@@ -8,6 +8,8 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { resolveNetwork, getOrCreateWallet, formatWalletBackupNotice, recordDeployment, isLocalDevnet } from './network';
 import { createWallet, persistWalletState, unshieldedToken, type WalletContext } from './wallet';
+import { loadOrCreateAttesterKey, formatVerifyingKey } from './attester';
+import { deployTimeWitnesses } from './witnesses';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { WebSocket } from 'ws';
 import * as Rx from 'rxjs';
@@ -23,9 +25,11 @@ import { CompiledContract } from '@midnight-ntwrk/midnight-js-protocol/compact-j
 // @ts-expect-error Required for wallet sync
 globalThis.WebSocket = WebSocket;
 
-// Identifier under which this contract's private state is stored. The
-// hello-world contract has no witnesses, so its private state is empty ({}).
-const PRIVATE_STATE_ID = 'helloWorldPrivateState';
+// Identifier under which this contract's private state is stored. Freeboard's
+// witnesses are supplied per-call by the CLI (the position and its signature are
+// not durable state), so the stored private state stays empty — but the id must
+// match what cli.ts uses or the two will look at different stores.
+const PRIVATE_STATE_ID = 'freeboardPrivateState';
 
 // ─── Network configuration ─────────────────────────────────────────────────────
 //
@@ -71,7 +75,7 @@ async function waitForProofServer(maxAttempts = 60, delayMs = 2000): Promise<boo
 // ─── Compiled contract loading ─────────────────────────────────────────────────
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const zkConfigPath = path.resolve(__dirname, '..', 'contracts', 'managed', 'hello-world');
+const zkConfigPath = path.resolve(__dirname, '..', 'contracts', 'managed', 'freeboard');
 const contractPath = path.join(zkConfigPath, 'contract', 'index.js');
 
 if (!fs.existsSync(contractPath)) {
@@ -79,11 +83,24 @@ if (!fs.existsSync(contractPath)) {
   process.exit(1);
 }
 
-const HelloWorld = await import(pathToFileURL(contractPath).href);
+const Freeboard = await import(pathToFileURL(contractPath).href);
 
-const compiledContract = CompiledContract.make('hello-world', HelloWorld.Contract).pipe(
-  CompiledContract.withVacantWitnesses,
-  CompiledContract.withCompiledFileAssets(zkConfigPath),
+// The generated Contract class requires the witness functions to EXIST even
+// though deployment only runs the constructor, which reads none of them. So pass
+// witnesses that throw if called: a witness firing during deploy is a bug, and
+// placeholder zeros would hide it behind an apparently-successful deployment.
+// (withVacantWitnesses is for contracts that declare no witnesses at all —
+// Freeboard declares two, so it does not apply here.)
+//
+// The combinators are called via `any` because the contract is imported
+// dynamically: their parameters are conditional types over the contract's own
+// type, which collapse to `never` once that type is `any`. The runtime behaviour
+// is unaffected; only the static types are lost, and they were already lost at
+// the dynamic import.
+const CC = CompiledContract as any;
+const compiledContract = CC.withCompiledFileAssets(
+  CC.withWitnesses(CC.make('freeboard', Freeboard.Contract), deployTimeWitnesses()),
+  zkConfigPath,
 );
 
 // ─── Providers ─────────────────────────────────────────────────────────────────
@@ -117,7 +134,7 @@ async function createProviders(walletCtx: WalletContext) {
 
   return {
     privateStateProvider: levelPrivateStateProvider({
-      privateStateStoreName: 'hello-world-state',
+      privateStateStoreName: 'freeboard-state',
       accountId,
       privateStoragePasswordProvider: () => privateStatePassword,
     }),
@@ -137,6 +154,23 @@ async function main() {
   console.log('╚══════════════════════════════════════════════════════════════╝\n');
 
   const seed = SEED;
+
+  // ─── Attester key ──────────────────────────────────────────────────────────
+  //
+  // Loaded BEFORE the wallet, because it is the one input that cannot be fixed
+  // after the fact: the verifying key becomes a constructor argument, and the
+  // contract has no rotation circuit. Failing here costs nothing; failing after
+  // a multi-minute sync and a deploy would cost a redeploy.
+  console.log('─── Attester ───────────────────────────────────────────────────\n');
+  const attester = loadOrCreateAttesterKey();
+  if (attester.created) {
+    console.log('  Generated a new attester keypair → .midnight-attester.json (mode 0600).');
+  } else {
+    console.log('  Loaded attester keypair from .midnight-attester.json.');
+  }
+  console.log(`  Verifying key: ${formatVerifyingKey(attester.verifyingKey)}`);
+  console.log('  ⚠ MOCK ORACLE: this key lives on the same machine as the prover, so it');
+  console.log('    proves the mechanism, not that any position is real. See src/attester.ts.\n');
 
   console.log('─── Wallet setup ───────────────────────────────────────────────\n');
   console.log('  Creating wallet...');
@@ -261,7 +295,8 @@ async function main() {
   console.log('  Checking proof server...');
   const proofServerReady = await waitForProofServer();
   if (!proofServerReady) {
-    console.log('\n  ❌ Proof server not responding. Run: docker compose up -d\n');
+    console.log(`\n  ❌ Proof server not responding at ${networkConfig.proofServer}.`);
+    console.log(`     Run: docker compose -f ${networkConfig.composeFile} up -d --wait\n`);
     await walletCtx.wallet.stop();
     process.exit(1);
   }
@@ -292,15 +327,15 @@ async function main() {
 
   for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
     try {
-      // Midnight.js 4.1.x supplies private state via privateStateId +
-      // initialPrivateState (empty here — the hello-world contract has no
-      // witnesses). args is the contract constructor's arguments: empty for
-      // hello-world's no-arg constructor. (Statically-typed contracts can omit
-      // args entirely; this script loads the contract dynamically, so the
-      // conditional args type widens to any[] and an explicit [] is required.)
+      // args are the contract constructor's arguments. Freeboard's constructor
+      // takes the attester's JubjubPoint verifying key — this is the moment the
+      // key is fixed for the life of the deployment. initialPrivateState is
+      // empty because the position and signature are per-call witnesses, not
+      // durable state. (Statically-typed contracts can omit args; this script
+      // loads the contract dynamically, so the type widens to any[].)
       deployed = await deployContract(providers, {
         compiledContract: compiledContract as any,
-        args: [],
+        args: [attester.verifyingKey],
         privateStateId: PRIVATE_STATE_ID,
         initialPrivateState: {},
       });
@@ -328,12 +363,16 @@ async function main() {
         if (errCause && errCause !== errMsg) console.error(`  Cause: ${errCause}`);
       }
 
+      // The port is read from config, not hardcoded: the ledger-9 devnet's proof
+      // server is on 16300, so a literal 6300 here would miss the match and fall
+      // through to a bare rethrow with no actionable hint.
+      const proofServerPort = new URL(networkConfig.proofServer).port;
       if (
         !isDustShortage &&
         (fullError.includes('Failed to connect to Proof Server') ||
-          fullError.includes('connect ECONNREFUSED 127.0.0.1:6300'))
+          fullError.includes(`ECONNREFUSED 127.0.0.1:${proofServerPort}`))
       ) {
-        console.log('  ❌ Proof server unreachable. Run: docker compose up -d\n');
+        console.log(`  ❌ Proof server unreachable. Run: docker compose -f ${networkConfig.composeFile} up -d --wait\n`);
         await walletCtx.wallet.stop();
         process.exit(1);
       }
@@ -365,8 +404,16 @@ async function main() {
   console.log('  ✅ Contract deployed successfully!\n');
   console.log(`  Contract Address: ${contractAddress}\n`);
 
-  recordDeployment(network, contractAddress, address.toString());
-  console.log('  Saved to .midnight-state.json\n');
+  // Record the attester key alongside the address. Without it there is no way to
+  // tell a "wrong key" failure (regenerated attester) apart from a genuinely
+  // invalid attestation — both surface as the same in-circuit assert.
+  recordDeployment(network, contractAddress, address.toString(), {
+    attesterVerifyingKey: {
+      x: `0x${attester.verifyingKey.x.toString(16)}`,
+      y: `0x${attester.verifyingKey.y.toString(16)}`,
+    },
+  });
+  console.log('  Saved to .midnight-state.json (address + attester verifying key)\n');
 
   await persistWalletState(network, walletCtx);
   await walletCtx.wallet.stop();

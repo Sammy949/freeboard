@@ -16,13 +16,14 @@ import { levelPrivateStateProvider } from '@midnight-ntwrk/midnight-js-level-pri
 import { NodeZkConfigProvider } from '@midnight-ntwrk/midnight-js-node-zk-config-provider';
 import { resolveNetwork, getOrCreateWallet, formatWalletBackupNotice, getDeployment } from '../src/network';
 import { createWallet, persistWalletState } from '../src/wallet';
+import { deployTimeWitnesses } from '../src/witnesses';
 import { CompiledContract } from '@midnight-ntwrk/midnight-js-protocol/compact-js';
 
 // @ts-expect-error wallet sync requires WebSocket
 globalThis.WebSocket = WebSocket;
 
-// Must match the privateStateId used at deploy time (witness-free → empty state).
-const PRIVATE_STATE_ID = 'helloWorldPrivateState';
+// Must match the privateStateId used at deploy time.
+const PRIVATE_STATE_ID = 'freeboardPrivateState';
 
 // ─── Network configuration ─────────────────────────────────────────────────────
 
@@ -56,13 +57,17 @@ async function main() {
 
   // 2. Build wallet and providers
   const __dirname = path.dirname(fileURLToPath(import.meta.url));
-  const zkConfigPath = path.resolve(__dirname, '..', 'contracts', 'managed', 'hello-world');
+  const zkConfigPath = path.resolve(__dirname, '..', 'contracts', 'managed', 'freeboard');
   const contractPath = path.join(zkConfigPath, 'contract', 'index.js');
   if (!fs.existsSync(contractPath)) fail('Compiled contract missing — run `npm run compile`.');
-  const HelloWorld = await import(pathToFileURL(contractPath).href);
-  const compiledContract = CompiledContract.make('hello-world', HelloWorld.Contract).pipe(
-    CompiledContract.withVacantWitnesses,
-    CompiledContract.withCompiledFileAssets(zkConfigPath),
+  const Freeboard = await import(pathToFileURL(contractPath).href);
+  // Witnesses that throw: this check is read-only and must never invoke a
+  // circuit, so a witness firing here means the check started doing more than
+  // it claims. Called via `any` for the same dynamic-import reason as deploy.ts.
+  const CC = CompiledContract as any;
+  const compiledContract = CC.withCompiledFileAssets(
+    CC.withWitnesses(CC.make('freeboard', Freeboard.Contract), deployTimeWitnesses()),
+    zkConfigPath,
   );
 
   const walletCtx = await createWallet({ network, networkConfig, seed: SEED });
@@ -86,7 +91,7 @@ async function main() {
 
   const providers = {
     privateStateProvider: levelPrivateStateProvider({
-      privateStateStoreName: 'hello-world-state',
+      privateStateStoreName: 'freeboard-state',
       accountId: walletCtx.unshieldedKeystore.getBech32Address().toString(),
       // SDK requires ≥16 chars. e2e-check is read-only so we don't expose
       // the env-var override here — match the deploy script's local-devnet default.
@@ -121,9 +126,45 @@ async function main() {
     fail(`queryContractState returned null for ${deployment.address}`);
   }
 
+  // 5. Decode the ledger and assert the shape Freeboard guarantees. A contract
+  // that is merely *present* is not enough — the point of this project is that
+  // the public state carries a verdict and NOTHING about the position, so check
+  // both halves: the expected fields exist, and no position field leaked in.
+  const l = Freeboard.ledger(onChainState.data);
+  for (const field of ['attesterPk', 'lastVerdict', 'lastAttestationAt', 'checkCount']) {
+    if (!(field in l)) {
+      await walletCtx.wallet.stop();
+      fail(`ledger is missing expected field '${field}'`);
+    }
+  }
+  const leaked = ['collateral', 'debt', 'liquidationThresholdBps', 'position'].filter((f) => f in l);
+  if (leaked.length > 0) {
+    await walletCtx.wallet.stop();
+    fail(`ledger exposes private position data: ${leaked.join(', ')}`);
+  }
+  if (Number(l.lastVerdict) !== 0 && Number(l.lastVerdict) !== 1) {
+    await walletCtx.wallet.stop();
+    fail(`lastVerdict is not a valid Verdict: ${l.lastVerdict}`);
+  }
+
+  // The attester key on-chain must match what deploy recorded, or every check
+  // against this contract will be rejected in-circuit.
+  if (deployment.attesterVerifyingKey) {
+    const onChainX = `0x${l.attesterPk.x.toString(16)}`;
+    const onChainY = `0x${l.attesterPk.y.toString(16)}`;
+    if (onChainX !== deployment.attesterVerifyingKey.x || onChainY !== deployment.attesterVerifyingKey.y) {
+      await walletCtx.wallet.stop();
+      fail('on-chain attester key does not match the recorded deployment key');
+    }
+  }
+
   console.log(`✅ e2e-check passed`);
   console.log(`   contractAddress: ${deployment.address}`);
   console.log(`   network:         ${network}`);
+  console.log(`   verdict:         ${Freeboard.Verdict[l.lastVerdict]}`);
+  console.log(`   checkCount:      ${l.checkCount}`);
+  console.log(`   attester key:    matches deployment record`);
+  console.log(`   no position data in public state ✓`);
 
   await walletCtx.wallet.stop();
   process.exit(0);
