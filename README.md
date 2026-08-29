@@ -48,26 +48,75 @@ says otherwise.
 
 ## Status
 
-Early, and honest about it.
+Working end to end on a local ledger-9 devnet, as of 2026-08-29.
 
 - ✅ **The contract works.** `contracts/freeboard.compact` compiles against
   Compact 0.34.0 with proving and verifier keys emitted, including the
   in-circuit Schnorr check.
-- ✅ **A ledger-9 devnet boots.** `docker-compose.ledger9.yml`, all services
-  healthy.
-- 🚧 **Deploy and CLI are not ported yet.** `src/` is still the generated
-  hello-world plumbing. It cannot deploy Freeboard as it stands.
+- ✅ **Deploy, CLI and the e2e check are ported and verified on-chain.** A signed
+  position produces a SAFE verdict, an under-collateralised one produces
+  AT_RISK, and a position tampered with after signing is **rejected in-circuit**
+  with no verdict written.
+- ⚠️ **The attester is a mock oracle.** Its signing key lives on the same machine
+  as the prover, so the check proves the *mechanism*, not that any position is
+  real. Replacing it with an independent attester needs no contract change —
+  that is why the check is in-circuit already. See `src/attester.ts`.
+- 🚧 **Not deployed to a public testnet, and no web UI yet.**
 
-Compiling the contract needs only the Compact compiler — no npm SDK:
+### Try it
 
 ```bash
-npm run compile     # -> contracts/managed/freeboard/{contract,keys,zkir}
+npm install
+npm run devnet:start                 # ledger-9 devnet, waits for healthy
+npm run compile                      # -> contracts/managed/freeboard/
+npm run deploy -- --network undeployed-l9
+npm run cli                          # interactive menu
 ```
 
-There is a version story behind that 🚧, and it is not a small one: every
+Or non-interactively:
+
+```bash
+npx tsx src/cli.ts --read            # the verifier's view: verdict only
+npx tsx src/cli.ts --check --read    # prove a position, then read the verdict
+npx tsx src/cli.ts --check --collateral 1000000 --debt 900000 --threshold 8500 --min-hf 15000 --read
+npx tsx src/cli.ts --check --tamper  # watch the in-circuit check reject it
+npm run test:e2e                     # asserts the public state leaks no position
+```
+
+A real run against the devnet:
+
+```
+Position (PRIVATE): collateral=1000000 debt=400000 threshold=8500bps
+Verifier threshold (PUBLIC): 15000bps
+Health factor (local, display only): 2.1250
+
+✅ Accepted. Verdict: ✅ SAFE
+
+─── Public ledger state (all a verifier can see) ───
+Verdict:          ✅ SAFE
+Attestation asOf: 1787957676
+Checks performed: 1
+↳ note what is NOT here: no collateral, no debt, no threshold.
+```
+
+And the tampered case — collateral inflated ×1000 *after* signing:
+
+```
+⚠ TAMPERING: inflating collateral ×1000 after signing.
+   signed collateral    = 1000000
+   submitted collateral = 1000000000
+Local signature check: INVALID
+
+🛑 REJECTED IN-CIRCUIT: position is not signed by the registered attester.
+   No verdict was written.
+```
+
+There is a version story behind the toolchain, and it is not a small one: every
 installable Compact compiler emits runtime 0.19.x, while the current stable SDK
-hard-pins 0.16.0. Freeboard therefore runs the 5.0.0-beta SDK deliberately.
-`notes/03-midnight-toolchain.md` has the full investigation.
+hard-pins 0.16.0. Freeboard therefore runs the 5.0.0-beta SDK deliberately, on a
+devnet assembled from pre-release images that upstream publishes no matrix for.
+`notes/03-midnight-toolchain.md` has the full investigation, including two
+failures worth knowing about if you rebuild this stack.
 
 ## Repo layout
 
@@ -80,8 +129,14 @@ freeboard/
 │   ├── 02-architecture.md
 │   ├── 03-midnight-toolchain.md    # version skew, the beta-SDK decision
 │   └── 04-roadmap-and-open-questions.md
-├── src/                            # deploy/CLI plumbing (still hello-world)
-├── docker-compose.yml              # ledger-8 devnet (known good)
+├── src/
+│   ├── attester.ts                 # the mock oracle: signs positions
+│   ├── witnesses.ts                # how a position reaches the circuit
+│   ├── deploy.ts                   # deploys, fixing the attester key
+│   ├── cli.ts                      # run checks, read verdicts
+│   └── network.ts, wallet.ts, …    # network config + wallet glue
+├── patches/cross-fetch/            # shim; see the file for why
+├── docker-compose.yml              # ledger-8 devnet (known good, but too old)
 └── docker-compose.ledger9.yml      # ledger-9 devnet (what 0.34.0 needs)
 ```
 
@@ -92,9 +147,9 @@ a web dashboard is the demo skin.
 
 # Scaffold documentation
 
-Everything below documents the `create-mn-app` plumbing in `src/`, which still
-targets the hello-world contract. It is accurate for that scaffold and is kept
-as the reference for the port.
+Everything below is inherited `create-mn-app` documentation. Most of it still
+applies (networks, wallets, env overrides); the parts describing a
+`hello-world` contract do not.
 
 ## Quick start
 
@@ -110,9 +165,9 @@ npm run test:e2e
 
 1. `docker compose -f <network's compose file> up -d --wait` — starts a local Midnight devnet (node, indexer, proof-server) and blocks until all three pass their healthchecks.
 2. `npm run compile` — compiles `contracts/freeboard.compact` to `contracts/managed/freeboard/`.
-3. `npm run deploy` — derives the genesis-seed wallet (NIGHT pre-minted), registers UTXOs for DUST generation, deploys the contract, writes `.midnight-state.json`.
+3. `npm run deploy` — derives the genesis-seed wallet (NIGHT pre-minted), registers UTXOs for DUST generation, loads or generates the attester key, deploys the contract with that key as its constructor argument, writes `.midnight-state.json`.
 
-`npm run test:e2e` reconnects to the deployed contract and reads its ledger state. Exits 0 if the contract is live and indexable.
+`npm run test:e2e` reconnects to the deployed contract, reads its ledger state, and asserts the public state carries a verdict and no position data. Exits 0 on success.
 
 ## Local devnets
 
@@ -275,33 +330,14 @@ generated state.
 | `npm run setup`         | One-shot: start devnet, compile, deploy.                       |
 | `npm run compile`       | Compile the Compact contract.                                  |
 | `npm run deploy`        | Deploy the compiled contract (requires devnet up + compiled).  |
-| `npm run cli`           | Interactive CLI to call circuits on the deployed contract.     |
+| `npm run cli`           | Run solvency checks / read verdicts. Interactive, or `--check` / `--read` / `--tamper` for one-shot. |
 | `npm run check-balance` | Print the genesis-seed wallet's NIGHT and DUST balances.       |
-| `npm run test:e2e`      | Smoke + read-back check against the deployed contract.         |
-| `npm run clean`         | Remove `contracts/managed/`, `.midnight-state.json`, and `.midnight-wallet-state/`. |
-| `npm run proof-server:start` / `:stop` | Compose lifecycle for just the proof-server service. |
+| `npm run test:e2e`      | Read-back check: contract is live, and its public state leaks no position. |
+| `npm run clean`         | Remove `contracts/managed/`, `.midnight-state.json`, `.midnight-attester.json`, and `.midnight-wallet-state/`. |
+| `npm run devnet:start` / `:stop` / `:clean` | Ledger-9 devnet lifecycle (`:clean` also drops volumes). |
+| `npm run proof-server:start` / `:stop` | Compose lifecycle for just the ledger-8 proof-server service. |
 
-## Project structure
-
-```
-freeboard/
-├── contracts/
-│   └── hello-world.compact     # Compact source
-├── scripts/
-│   └── e2e-check.ts            # smoke + read-back
-├── src/
-│   ├── network.ts              # network selection + state file management
-│   ├── wallet.ts               # wallet construction + sync-state cache
-│   ├── setup.ts                # orchestrator for `npm run setup`
-│   ├── deploy.ts               # deploy the contract
-│   ├── cli.ts                  # interact with deployed contract
-│   └── check-balance.ts        # NIGHT / DUST balance
-├── docker-compose.yml          # node + indexer + proof-server
-├── .midnight-state.json        # written by deploy (gitignored)
-├── .midnight-wallet-state/     # serialized sync state per network (gitignored)
-├── package.json
-└── tsconfig.json
-```
+(See **Repo layout** near the top for the current structure.)
 
 ## Compact compiler version
 

@@ -59,5 +59,9 @@ temp/
 # Attester signing key (mock oracle — still a secret; see src/attester.ts)
 .midnight-attester.json
 
+# LevelDB store the private-state provider creates in cwd (default db name).
+# Generated runtime state, and it holds private-state material — never commit it.
+midnight-level-db/
+
 # Midnight wallet sync state (per-network serialized wallet state cache)
 .midnight-wallet-state/

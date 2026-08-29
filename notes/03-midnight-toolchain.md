@@ -62,11 +62,10 @@ my-app/
 └── .midnight-state.json        # deploy state (contract address, network) — gitignored
 ```
 
-## Folder plan for /home/samy/dev/freeboard
-`freeboard/notes/` already exists (these notes). Decide next session how the scaffold
-sits relative to it: `create-mn-app` creates a named subdir and may refuse a non-empty
-target. Cleanest option: scaffold into the repo root and keep `notes/` alongside, OR
-scaffold as `freeboard/app/` and treat notes as top-level. NOT yet decided/created.
+## Folder plan — SETTLED
+The scaffold sits at the repo root with `notes/` alongside it. (`create-mn-app` creates a
+named subdir and may refuse a non-empty target; the alternative considered was
+`freeboard/app/` with notes top-level.) Root won; hello-world is fully replaced.
 
 ## Environment state on this machine (re-checked 2026-08-28)
 - node v24.17.0 ✅   npm 11.13.0 ✅   npx present ✅
@@ -185,8 +184,7 @@ to move to ledger 9 as well.
   indexer 4.4.0 as "pre-alpha integration builds for the future ledger-9/node-2 line" —
   that line is now exactly what we want, but it is still unreleased.
 
-### ✅ The ledger-9 devnet BOOTS (verified 2026-08-28)
-Written as `docker-compose.ledger9.yml` (kept separate; `docker-compose.yml` stays as the
+### ✅ The ledger-9 devnet BOOTS (verified 2026-08-28)Written as `docker-compose.ledger9.yml` (kept separate; `docker-compose.yml` stays as the
 known-good ledger-8 fallback). Ports offset +10000 so both stacks can coexist:
 node 19944, indexer 18088, proof-server 16300.
 `docker compose -f docker-compose.ledger9.yml up -d --wait` → **all three healthy**.
@@ -215,3 +213,71 @@ rather than discovered late.
 ~33MB then dies in `unzip` with "not enough memory for bomb detection" on this 7GB box.
 Direct CDN download 403s. Retry with more free RAM if we ever need it.)
 
+
+---
+
+## ✅ RESOLVED: the full stack works (2026-08-29)
+
+Deploy + call + read all succeed on the local ledger-9 devnet. The escape hatch above was
+NOT needed — Schnorr is intact. Getting here required fixing two things that the "devnet
+boots" note above did not catch, because booting is not the same as accepting transactions.
+
+### Trap 1: "ledger 9" is not one thing — pin the PATCH version
+`docker-compose.ledger9.yml` originally ran node **2.1.0-beta.1**, which pins midnight-ledger
+**9.1.0.0-rc.4**. But compiler 0.34.0 targets **rc.3** (`compact --ledger-version`) and the
+beta SDK pins **rc.3** (`@midnightntwrk/ledger-v9` 1.0.0-rc.3). rc.3 → rc.4 changed state
+encoding v17 → v18 and revised cost-model factors, and node 2.1 moved
+`transaction_version` 3 → 4.
+
+Symptom: everything succeeds — wallet syncs, balance present, DUST ready, proof built — and
+then submission fails with:
+```
+1010: Invalid Transaction: Custom error: 170
+```
+Traced through the node source rather than guessed: `pallets/midnight/src/lib.rs` maps ledger
+validation errors to `InvalidTransaction::Custom(code)`, and
+`ledger/src/versions/common/types.rs` gives `170 = MalformedError::InvalidDustSpendProof`.
+So the error names DUST, and the cause is a ledger version skew. Nothing in the message
+points at versions, which is what makes it expensive.
+
+Fix: node **2.0.0-rc.4**, which pins ledger 9.1.0.0-rc.3 — matching compiler and SDK. The
+compose file now carries this reasoning inline so nobody "upgrades" the node back.
+Rule: keep the ledger patch version identical across compiler, SDK and node.
+
+### Trap 2: indexer 4.4.0-rc.x compresses; `cross-fetch` cannot read it
+Next failure after the version fix:
+```
+IndexerQueryError: Invalid response body while trying to fetch
+http://127.0.0.1:18088/api/v4/graphql: Premature close
+```
+which reads like a network fault and is not one. Indexer 4.4.0 wraps its GraphQL API in a
+tower-http `CompressionLayer` (`indexer-api/src/infra/api.rs`) and serves compressed,
+chunked bodies. `node-fetch` 2.x — which `cross-fetch` 4.x uses under Node, and which the
+SDK imports directly — throws `ERR_STREAM_PREMATURE_CLOSE` on them.
+
+Isolated by testing each layer:
+- Node's built-in `fetch` (undici) reads the same response fine.
+- `cross-fetch` fails for `gzip`, `br`, `zstd` AND the default (no header).
+- `cross-fetch` succeeds with `Accept-Encoding: identity` or node-fetch's `compress: false`.
+- The ledger-8 indexer 4.3.3 does not compress, so this never appeared before.
+
+The SDK exposes no way to inject a fetch implementation, so the fix is an npm `overrides`
+entry pointing `cross-fetch` at `patches/cross-fetch/`, a ~40-line shim that forces identity
+encoding and delegates to the real package (aliased as `cross-fetch-real`). Removal criteria
+are in the shim's header comment. Cost: indexer responses travel uncompressed — irrelevant
+on a local devnet, reconsider for a remote indexer.
+
+### The working pin set (all verified together)
+| Component | Version |
+|---|---|
+| Compact compiler | 0.34.0 (language 0.26.0, runtime 0.19.0, ledger 9.1.0.0-rc.3) |
+| midnight-js-* | 5.0.0-beta.7 |
+| compact-runtime | 0.19.0-rc.0 |
+| wallet-sdk | 2.0.0-beta.2 (+ `wallet-sdk-utilities` 1.2.1 override) |
+| node | **2.0.0-rc.4** |
+| indexer-standalone | 4.4.0-rc.2 (+ cross-fetch shim) |
+| proof-server | 9.0.0-rc.6 |
+
+Two `overrides` are load-bearing and both work around published-dependency bugs, not
+preferences: `wallet-sdk-utilities` 1.2.1 (the 1.2.0 the wallet SDK asks for has no `Clock`
+module, so the barrel import throws) and `cross-fetch` (trap 2).

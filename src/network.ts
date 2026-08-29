@@ -52,6 +52,16 @@ export interface DeploymentRecord {
   address: string;
   deployedAt: string;
   deployer: string;
+  /**
+   * The attester verifying key baked into this deployment's constructor, hex.
+   *
+   * Recorded because the contract has no rotation circuit: attestations only
+   * verify against the key the contract was deployed with. If the local attester
+   * key is regenerated, every call to this address fails the in-circuit assert,
+   * and comparing against this field is the only way to detect that before
+   * paying for a proof. Public data — it is on-chain in the ledger.
+   */
+  attesterVerifyingKey?: { x: string; y: string };
 }
 
 export interface WalletRecord {
@@ -398,7 +408,7 @@ export function recordDeployment(
   network: NetworkId,
   address: string,
   deployer: string,
-  opts: FsOptions = {},
+  opts: FsOptions & { attesterVerifyingKey?: { x: string; y: string } } = {},
 ): void {
   const cwd = opts.cwd ?? process.cwd();
   const existing = loadState({ cwd });
@@ -410,7 +420,12 @@ export function recordDeployment(
   };
   next.deployments = {
     ...next.deployments,
-    [network]: { address, deployer, deployedAt: new Date().toISOString() },
+    [network]: {
+      address,
+      deployer,
+      deployedAt: new Date().toISOString(),
+      ...(opts.attesterVerifyingKey ? { attesterVerifyingKey: opts.attesterVerifyingKey } : {}),
+    },
   };
   saveState(next, { cwd });
 }
