@@ -1,0 +1,7 @@
+{
+  "name": "cross-fetch",
+  "version": "4.1.0",
+  "description": "Local shim: cross-fetch with response compression disabled (see README.md in this folder)",
+  "main": "index.js",
+  "license": "MIT"
+}

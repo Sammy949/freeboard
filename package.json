@@ -18,7 +18,7 @@
     "devnet:clean": "docker compose -f docker-compose.ledger9.yml down -v",
     "proof-server:start": "docker compose up -d",
     "proof-server:stop": "docker compose down",
-    "clean": "rm -rf contracts/managed .midnight-state.json .midnight-attester.json .midnight-wallet-state",
+    "clean": "rm -rf contracts/managed .midnight-state.json .midnight-attester.json .midnight-wallet-state midnight-level-db",
     "test": "echo \"Error: no test specified\" && exit 1",
     "test:e2e": "tsx scripts/e2e-check.ts"
   },
@@ -35,6 +35,7 @@
     "@midnight-ntwrk/midnight-js-utils": "5.0.0-beta.7",
     "@midnight-ntwrk/wallet-sdk": "2.0.0-beta.2",
     "@scure/bip39": "2.2.0",
+    "cross-fetch-real": "npm:cross-fetch@4.1.0",
     "rxjs": "^7.8.2",
     "ws": "^8.21.1"
   },
@@ -48,7 +49,8 @@
     "node": ">=22.0.0"
   },
   "overrides": {
-    "@midnight-ntwrk/wallet-sdk-utilities": "1.2.1"
+    "@midnight-ntwrk/wallet-sdk-utilities": "1.2.1",
+    "cross-fetch": "file:./patches/cross-fetch"
   },
   "keywords": ["midnight", "blockchain", "zero-knowledge", "privacy"]
 }
