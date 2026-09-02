@@ -201,6 +201,31 @@ includes emoji rows because a code-point count passes without them.
   does NOT exercise this — clack cancels on the stdin BYTE, not the signal.
 - `--colateral 5` now fails with `unknown flag: --colateral`.
 
+**A third bug, found by not being able to explain a number (2026-09-02).** A ledger
+read taken seconds after an accepted check showed the state from BEFORE it: verdict
+`at_risk`, `checkCount 0`, `asOf (none yet)` on a contract that had already been
+written to. `readLedger` goes through `queryContractState` on the INDEXER, which
+surfaces a block some time after the chain has it, so `--check --read` was racing it and
+could print "Accepted. Verdict: SAFE" directly above a frame showing the previous
+`checkCount`. In a demo that reads as the contract not working.
+
+Fixed in the client, not the CLI, because the web service has the identical hazard
+(`POST /check` then `GET /verdict`): `waitForAttestation(asOf)` polls until
+`lastAttestationAt` equals the `asOf` that was signed, then returns that view. It
+matches on `asOf` rather than on `checkCount` so it cannot be fooled by a concurrent
+call, returns `settled: false` with the last view instead of throwing on timeout, and
+reads before it sleeps, so the common warm-devnet case costs one query and no delay.
+The CLI says "the indexer has not surfaced this check yet" rather than printing stale
+numbers. Verified: before, asOf 1788354263 / checkCount 1; accepted a check at block
+2628; the immediate `--read` showed asOf 1788356855 / checkCount 2 with no warning.
+
+**One thing left unattributed.** That contract carried one accepted SAFE check signed
+at 13:04:23 UTC that no command in this session produced — the only check run against it
+here was a tampered one, which writes nothing. `test:e2e` agrees with the chain so the
+state is coherent, and the staleness bug above is what made the numbers look
+contradictory, but the origin of that call is unknown rather than explained. Recorded
+because a guess would be worse.
+
 ## Wave 1 finishing pass (2026-08-30)
 
 ### CLI polish — superseded 2026-09-02, kept for the reasoning

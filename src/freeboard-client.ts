@@ -308,6 +308,27 @@ export interface FreeboardClient {
   balances(): Promise<{ tNight: bigint; dust: bigint }>;
   /** `null` when the address holds no contract state. */
   readLedger(): Promise<LedgerView | null>;
+  /**
+   * Wait until the ledger reflects a specific attestation, then return that view.
+   *
+   * `readLedger` reads through the INDEXER, which surfaces a block some time after the
+   * chain has it. So reading straight after an accepted submit can return the state
+   * from BEFORE it: "Accepted. Verdict: SAFE" printed above a ledger frame still
+   * showing the previous `checkCount`. The gap is small on a local devnet and larger on
+   * a public network, and it is a race either way.
+   *
+   * Matches on `lastAttestationAt`, which is the `asOf` that was signed. Two checks
+   * inside the same second would collide, and that is harmless: their ledger states are
+   * equivalent, so returning either is correct.
+   *
+   * Returns `settled: false` with the last view read rather than throwing on timeout.
+   * A caller can then say the read is behind, which is more useful than an error and
+   * much more useful than silently printing stale numbers.
+   */
+  waitForAttestation(
+    asOf: bigint,
+    opts?: { timeoutMs?: number; intervalMs?: number },
+  ): Promise<{ ledger: LedgerView | null; settled: boolean }>;
   /** Signs a position. Synchronous, off-chain, and prints nothing. */
   stage(input: CheckInput): StagedCheck;
   /** Proves and submits a staged check. Never throws for a normal rejection. */
@@ -374,6 +395,23 @@ export async function connectFreeboard(opts: ConnectOptions = {}): Promise<Freeb
   });
   hooks.onConnected?.();
 
+  // Declared as a local rather than reached for through `this`, because both
+  // `readLedger` and `waitForAttestation` need it and `this` inside the returned
+  // literal is not typed as the client.
+  const readLedgerNow = async (): Promise<LedgerView | null> => {
+    const contractState = await providers.publicDataProvider.queryContractState(deployment.address);
+    if (!contractState) return null;
+    const l = mod.ledger(contractState.data);
+    const verdictRaw = Number(l.lastVerdict);
+    return {
+      verdict: verdictRaw === 1 ? 'safe' : 'at_risk',
+      verdictRaw,
+      lastAttestationAt: l.lastAttestationAt === 0n ? null : l.lastAttestationAt,
+      checkCount: l.checkCount,
+      attesterPk: { x: l.attesterPk.x, y: l.attesterPk.y },
+    };
+  };
+
   return {
     network,
     networkConfig: config,
@@ -390,18 +428,21 @@ export async function connectFreeboard(opts: ConnectOptions = {}): Promise<Freeb
       };
     },
 
-    async readLedger() {
-      const contractState = await providers.publicDataProvider.queryContractState(deployment.address);
-      if (!contractState) return null;
-      const l = mod.ledger(contractState.data);
-      const verdictRaw = Number(l.lastVerdict);
-      return {
-        verdict: verdictRaw === 1 ? 'safe' : 'at_risk',
-        verdictRaw,
-        lastAttestationAt: l.lastAttestationAt === 0n ? null : l.lastAttestationAt,
-        checkCount: l.checkCount,
-        attesterPk: { x: l.attesterPk.x, y: l.attesterPk.y },
-      };
+    readLedger: readLedgerNow,
+
+    async waitForAttestation(asOf, opts = {}) {
+      const timeoutMs = opts.timeoutMs ?? 15_000;
+      const intervalMs = opts.intervalMs ?? 500;
+      const deadline = Date.now() + timeoutMs;
+
+      // Read first, then sleep. On a warm local devnet the indexer is usually already
+      // there, so the common case costs one query and no delay at all.
+      for (;;) {
+        const ledger = await readLedgerNow();
+        if (ledger?.lastAttestationAt === asOf) return { ledger, settled: true };
+        if (Date.now() + intervalMs > deadline) return { ledger, settled: false };
+        await new Promise((resolve) => setTimeout(resolve, intervalMs));
+      }
     },
 
     stage(input) {

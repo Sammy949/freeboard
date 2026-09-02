@@ -323,6 +323,17 @@ async function runCheck(
       else ok(`Accepted. Verdict: ${verdictLine(result.verdict)}`);
       console.log(info(`     Tx:    ${result.txId}`));
       console.log(info(`     Block: ${result.blockHeight}\n`));
+
+      // The ledger is read through the indexer, which surfaces a block after the chain
+      // has it, so `--check --read` could print "Accepted" above a frame still showing
+      // the PREVIOUS checkCount. Wait for this attestation to appear before anything
+      // reads. Usually instant; if it is not, say so rather than print stale numbers.
+      {
+        const { settled } = await client.waitForAttestation(staged.signed.asOf);
+        if (!settled) {
+          warn('The indexer has not surfaced this check yet — a ledger read may lag behind it.');
+        }
+      }
       break;
 
     case 'rejected-in-circuit':
