@@ -1,10 +1,14 @@
 # Roadmap & open questions
 
-## STATUS (2026-08-29): WORKING END TO END on a local ledger-9 devnet ✅
-Deployed, called, and verified on-chain. Contract address (local devnet)
-`5a94d572301ae68a9ecf9ff65a826167dadd4cec5010a44c865d8a7de4d1dc10`.
+## STATUS (2026-09-01): WORKING END TO END on a local ledger-9 devnet ✅
+Deployed, called, and verified on-chain, most recently on a fresh devnet on
+2026-09-01. The contract address is NOT stable across devnet restarts: the compose
+files declare no volumes, so each restart is a new chain and a new deploy. Do not
+quote an address from these notes as a live one — read the current one from
+`.midnight-state.json` under `deployments.undeployed-l9`.
 
-Three real runs, all confirmed by reading the ledger back through the indexer:
+Three real runs on 2026-08-29, all confirmed by reading the ledger back through
+the indexer, and the SAFE and TAMPERED cases re-confirmed live on 2026-09-01:
 - **SAFE**: collateral 1,000,000 / debt 400,000 / threshold 8500bps vs min HF
   15000bps → HF 2.125 → `lastVerdict = safe`.
 - **AT_RISK**: debt raised to 900,000 → HF 0.944 → `lastVerdict = at_risk`.
@@ -32,8 +36,9 @@ Freeboard verdict as proof of a real position until that swap happens.
    supplies them; the deploy-time versions THROW if called, because a zeroed
    placeholder position would hide a bug behind a successful-looking deploy.
 2. **Witnesses are per-call, not durable state.** Each `checkSolvency` is about one
-   attested position, so `cli.ts` stages the position in a slot the witness
-   supplier reads, then clears it. The stored private state stays `{}`.
+   attested position, so the caller stages the position in a slot the witness
+   supplier reads, then clears it. The stored private state stays `{}`. That slot
+   now lives module-private inside `src/freeboard-client.ts`, not in `cli.ts`.
 3. **The combinators need `any` under a dynamic import.** `withWitnesses`'s
    parameter is a conditional type over the contract's type, which collapses to
    `never` when that type is `any`. Runtime behaviour is unaffected.
@@ -58,9 +63,10 @@ Freeboard verdict as proof of a real position until that swap happens.
 2. ~~**Scaffold**~~ ✅ (hello-world, now fully replaced).
 3. ~~**Write `freeboard.compact` v1**~~ ✅ ~~**v2 Schnorr attestation**~~ ✅
 4. ~~**Exercise via CLI on local devnet**~~ ✅ deploy + 3 verified checks + e2e.
-5. **NEXT: public testnet + the demo skin.** Deploy to `preview`, then the web
-   dashboard + water landing page, with Lace. Open question 3 (HF parity with
-   Anchor) is worth settling before the UI hardcodes a formula.
+5. ~~**CLI polish + shared client extraction**~~ ✅ (2026-08-30, see below).
+6. **NEXT: the dashboard, then public testnet.** Single-page demo over
+   `src/freeboard-client.ts`, then deploy to `preview` with Lace. Open question 3
+   (HF parity with Anchor) is worth settling before the UI hardcodes a formula.
 
 **v1 mechanic (done):** private position witnesses, one public input
 `minHealthFactorBps: Uint<32>`, division-free solvency check
@@ -131,6 +137,127 @@ and pass the pubkey in. The witness impls must return the SAME numbers the attes
 signed, in the same order, or every call fails the assert.
 
 
+## Wave 1 finishing pass (2026-08-30)
+
+### CLI polish — done
+`src/cli.ts` now dresses its output with `chalk` / `ora` / `boxen`. Presentation
+only: same five menu options, same order, same flags, same prompts.
+- The verdict block is the ONLY thing in a border. `boxen` means "this is the
+  answer"; the banner stays hand-drawn so the box keeps that meaning. The
+  "what is NOT here" line lives inside the box — the absence is the result, not
+  a footnote to it.
+- `ora` covers the prove-and-submit wait, with three terminal states: `succeed`,
+  `fail`, and `stopAndPersist({symbol: '🛑'})` for the in-circuit rejection.
+  The rejection is styled as a definite OUTCOME, not an error, because that
+  rejection is the demo working.
+- The wallet-sync ticker is deliberately NOT ora. Sync races the SDK's own RPC
+  logging on stdout and ora repaints every frame, so the two interleave into a
+  smear; a plain `\r` ticker degrades gracefully under interleaved output.
+
+Two rendering bugs found by piping with `FORCE_COLOR=3` through `cat -A` and
+reading the escape codes — neither was visible in plain output:
+- A `\n` INSIDE `chalk.cyan(...)` emits a coloured blank line (`^[[36m^[[39m`).
+  Keep newlines outside the chalk call.
+- ora's `prefixText` already supplies the indent, so a `symbol` must not add its
+  own or the persisted line sits two columns right of `✔`/`✖`.
+
+**Deliberately deferred, not oversights:** `inquirer.js` and `gradient-string`
+(explicitly out of scope this pass), the multi-page site, and the docs page.
+
+### Shared client — done
+`src/freeboard-client.ts` now owns every contract interaction, because the web
+dashboard runs the same flow and two copies would drift into two different demos.
+It prints NOTHING: returns data or throws, and takes optional lifecycle hooks so
+the CLI keeps its spinner without the module knowing what a spinner is.
+- `connectFreeboard()` → attester key + wallet + providers + `findDeployedContract`,
+  held for a whole session (the sync is minutes, not milliseconds).
+- The per-call witness slot is module-PRIVATE. The only way to reach it is
+  `submitCheck`, which fills it immediately before proving and clears it in a
+  `finally` — a stale position can never serve a later call.
+- `submitCheck` returns a discriminated union, and `rejected-in-circuit` is a
+  first-class outcome alongside `accepted` / `failed`. Modelling the tamper
+  rejection as a thrown error would push every caller into treating the best
+  moment of the demo as a failure.
+- `stageCheck()` is a free function so signing and tampering can be exercised
+  with the chain down — verified: healthy HF 2.125 → safe, at-risk HF 0.944 →
+  not safe, tampered signature invalid locally while still verifying against the
+  ORIGINAL numbers (which is what makes it an in-circuit rejection rather than a
+  malformed signature), `debt == 0` → safe.
+- An explicit `network` is routed back through `resolveNetwork` as a flag rather
+  than indexing `NETWORK_CONFIGS`, so `MIDNIGHT_*_URL` overrides survive. Both
+  paths checked.
+
+**Live run: VERIFIED 2026-09-01.** The sequence holds against real proofs on a
+fresh ledger-9 devnet, not staged data.
+- `--check` healthy (collateral 1,000,000 / debt 400,000 / threshold 8500bps vs
+  min HF 15000bps): `ora` spinner → `succeed` → `✔ Accepted. Verdict: ✅ SAFE`,
+  with tx hash and block number. HF 2.1250 vs threshold 1.5000, as expected.
+- `--check --tamper --read`: spinner → `stopAndPersist({symbol:'🛑'})` →
+  `🛑 REJECTED IN-CIRCUIT: position is not signed by the registered attester.`
+  → the `boxen` ledger block. Borders render intact, and the 🛑 line sits at the
+  same indent as the `✔` line, so the `prefixText` fix holds under a real run.
+- The box read `Checks performed: 1` after the rejected call: the healthy check
+  counted, the tampered one wrote nothing. The anti-theater property demonstrated
+  live rather than asserted.
+
+Note the box only appears with `--read`; `--check` alone ends at the spinner's
+terminal line. That is by design (`printLedger` is menu option 2), but it means a
+scripted demo wants `--check --read` to show the whole arc.
+
+### Dashboard — next
+Single page, Wave 1 scope: header + tagline, the waterline visual (verdict /
+`asOf` / check count above the line, an obscured — not empty — region below it for
+collateral/debt/threshold), three preset scenarios hitting the real backend
+through a Node-side API route over `freeboard-client.ts`, and an understated
+monospace technical footer. Proving cannot move into the browser: the wallet seed,
+the attester signing key and the proof-server call all live server-side.
+
+shadcn preset to scaffold with (noted, not yet run):
+```
+npx shadcn@latest init --preset b7ClQ5x34 --template next
+bunx --bun shadcn@latest init --preset b7ClQ5x34 --template next
+```
+
+## Devnet operations (2026-09-01) — three traps, none of them "Docker is broken"
+
+The devnet was blamed for crashing WSL. Only the first item was a memory problem,
+and Docker itself was never the cause: the daemon's own peak was 166MB. Two
+separate failures were hiding behind one symptom.
+
+1. **The VM ran out of memory; a large swap turned that into a hang.** The kernel
+   log shows a global OOM inside the VM whose victim was `node` at 5.8GB RSS (the
+   wallet SDK plus WASM prover), not a container. The VM was capped at 8GB with
+   16GB of swap on a virtual disk, so it paged for minutes instead of failing
+   fast. Fixed host-side (10GB cap, 4GB swap, gradual memory reclaim) and
+   guest-side (`vm.swappiness=10`). Every ledger-9 service now carries a
+   `mem_limit` with `memswap_limit` equal to it, so a container leak is contained
+   instead of triggering a global OOM that kills the prover mid-proof. Measured
+   peaks are in the compose header; nothing came within 6× of its cap.
+
+2. **A stale wallet sync cache hangs the deploy forever, silently.** FIXED — see open
+   question 9. Cost 16 minutes on a run that takes 45 seconds, and it looks exactly like a
+   broken devnet. `loadWalletState` used to validate only that the file parses and that
+   `version === 1`; it could not tell that the serialized state belonged to a chain that no
+   longer exists. The wallet printed
+   `Restored 3/3 child wallets … sync will resume from saved point`, then waited for a
+   checkpoint the new genesis had never heard of: zero CPU, three idle websockets to the
+   indexer, no error, no timeout, no progress. Because neither compose file declares volumes,
+   EVERY devnet restart produced this state. The cache is now bound to the chain's genesis
+   hash and discards itself on mismatch. **If a run ever hangs at `Still syncing...` again,
+   check CPU first: zero means it is waiting, not working.**
+
+3. **Starting Docker resurrects containers you thought were stopped.** FIXED — see open
+   question 10, restart policies removed from both files. With `restart: on-failure` and
+   containers left behind by a crash, `systemctl start docker` brought BOTH stacks' indexers
+   up on its own; no wrong command needed. That is how two full stacks came to be running on
+   2026-08-29. Both reported `healthy` while their own nodes were down, because that
+   healthcheck only `cat`s a file — so `healthy` on an indexer does not mean it is indexing
+   anything.
+
+Also renamed: `proof-server:start` → `devnet8:start`. It ran `docker compose up
+-d` against the default file, so it started the whole ledger-8 stack while
+reading like it started one service. Added `devnet:ps` and `devnet:stop-all`.
+
 ## Open questions to settle next session
 1. **Oracle / attestation source — now the BIGGEST open item.** Everything else works; this
    is the difference between a demo and a product. `src/attester.ts` is a mock: it holds the
@@ -158,6 +285,20 @@ signed, in the same order, or every call fails the assert.
 8. **Cross-chain reality check.** Aave positions live on EVM; Midnight is separate. Wave 1
    sidesteps this via the signed attestation (the oracle bridges it). Note it explicitly so
    we don't accidentally claim on-chain-state proof we don't have.
+9. ~~**Make the wallet cache self-invalidating.**~~ Settled 2026-09-01, genesis-hash binding.
+   `src/chain-identity.ts` reads `chain_getBlockHash[0]` over JSON-RPC; `saveWalletState`
+   stamps it into `chain.json` beside the child states, and `loadWalletState` takes the current
+   hash as a REQUIRED positional parameter, so there is no way to read the cache without
+   saying which chain you are on. A mismatch, or a cache with no chain record at all (every
+   cache written before this change), is discarded with a message naming both hashes, and
+   `clearWalletState()` finally has its caller. If the node will not identify itself the
+   behaviour is fail-closed in both directions: no restore, and no write either, since an
+   unstamped cache would only be rejected later. Covered by `npm run test:cache`.
+10. ~~**Decide whether `restart: on-failure` is worth its cost.**~~ Settled 2026-09-01, removed
+    from both files. Verified it was not load-bearing: with the policy gone, `up -d --wait`
+    plus `depends_on: service_healthy` still brings all three services to healthy. Verified the
+    hazard is gone too: `docker kill` on the indexer (exit 137, precisely what `on-failure`
+    triggers on) leaves it `Exited` instead of resurrecting it.
 
 
 ## Landing page (later — respect the anti-slop law in ~/.claude/CLAUDE.md)
