@@ -18,7 +18,7 @@
 #
 # LOCAL DEVELOPMENT ONLY — do not expose these ports to a public network.
 # Ports are offset by +10000 from the ledger-8 stack so both can coexist. They
-# should NOT coexist on a 16GB laptop — see the memory note below.
+# should NOT coexist on a typical dev machine — see the memory note below.
 # Up:   docker compose -f docker-compose.ledger9.yml up -d --wait
 # Down: docker compose -f docker-compose.ledger9.yml down -v
 #
@@ -41,7 +41,7 @@
 #   node          224 MiB peak   (15% of its cap)
 #   indexer       191 MiB peak   ( 9%)
 #   proof-server  112 MiB peak   ( 3%)
-#   whole VM      4.9 GiB of 9.9 GiB peak, swap never touched
+#   whole VM      4.9 GiB peak, well inside its cap, swap never touched
 # The proof server never spiked: this circuit is small enough that proving is
 # not the memory event it was assumed to be. The caps are kept as-is anyway,
 # because that sample covers well under an hour of chain and the indexer's
