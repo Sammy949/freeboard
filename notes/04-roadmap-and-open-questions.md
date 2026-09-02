@@ -246,10 +246,49 @@ SDK into `web/`. What decided it:
 The Next side still gets a thin route handler as the public surface, so the
 browser only ever talks to Next and the architecture line above still holds.
 
-**Not settled: whether each preset triggers a live 30-60s proof or the page proves
-once and then re-reads the ledger.** Deferred to the design pass on purpose — a
-30-60s wait is a composition problem before it is an engineering one, and the
-spinner state has to be designed rather than apologised for.
+**SETTLED 2026-09-02 — prove once, cache, keep exactly one live action.** A preset
+click does not prove. `npm run prime` proves the two cacheable scenarios ahead of
+time and writes `.midnight-results.json`; the page serves those records. Three
+constraints shaped it, and the first would have broken the obvious version:
+
+1. **The ledger holds ONE verdict, not one per scenario.** `lastVerdict` is a
+   single slot, so proving healthy and then undercollateralised leaves the chain
+   reading `at_risk`; re-reading it for the healthy preset would answer with the
+   other scenario's verdict. So each cached record is the authority for its own
+   scenario, and `GET /verdict` is a SEPARATE current-chain-state view that
+   corroborates whichever check landed last. The UI must not conflate them. The
+   records carry `asOf`, which is what lets the page say which one the ledger
+   currently reflects.
+2. **The tampered scenario has no ledger representation at all**, so it cannot be
+   cached even in principle: the circuit rejects it, no verdict is written, and
+   `checkCount` does not move (verified live 2026-09-01 — the box read
+   `Checks performed: 1` after the rejected call). It is therefore the live
+   action, which is also the right one to keep live: the in-circuit rejection is
+   the anti-theater claim, and it should happen in front of you.
+3. **A cache outlives the chain it describes.** Neither compose file declares
+   volumes, so every restart is a new chain and a new deployment, and a record
+   naming a txId from a dead chain is worse than no record because it still looks
+   verified. Same failure as the wallet cache, so it gets the same guard: the
+   genesis hash and contract address are stored with the records and REQUIRED
+   positionally to read them back. `GET /scenarios` populates `cached` only when
+   the binding holds; otherwise it reports `records: N` with a non-`current`
+   status, which is the "re-run `npm run prime`" signal rather than an empty page.
+
+New surface: `src/scenarios.ts` (the three presets, one source of truth, `liveOnly`
+on the tampered one), `src/results-cache.ts` (on-disk format, pure fs, no SDK, cwd
+injectable), `scripts/prime-results.ts` (`npm run prime`, writes nothing unless
+both scenarios land — a half-primed cache sends the demo to a live proof
+mid-click), and `GET /scenarios`, which answers WITHOUT connecting for the same
+reason `/health` does: a cached record that waits on a wallet sync has bought
+nothing.
+
+**Verified 2026-09-02:** `npm run test:cache` is 27 assertions (was 13), covering
+every binding-failure path plus the scenario-set invariants; `npx tsc --noEmit`
+clean; `/scenarios` exercised against the running service in 35ms with the devnet
+down, and again with synthetic records on disk to confirm `cached` stays null under
+`chain-unknown`. **NOT verified: a real `npm run prime`** — the devnet is down (no
+docker daemon on this box), so no proof has been cached yet. Run it after the next
+`npm run deploy`.
 
 shadcn preset to scaffold with (already run, recorded for reproducibility):
 ```
@@ -265,13 +304,14 @@ separate failures were hiding behind one symptom.
 
 1. **The VM ran out of memory; a large swap turned that into a hang.** The kernel
    log shows a global OOM inside the VM whose victim was `node` at 5.8GB RSS (the
-   wallet SDK plus WASM prover), not a container. The VM was capped at 8GB with
-   16GB of swap on a virtual disk, so it paged for minutes instead of failing
-   fast. Fixed host-side (10GB cap, 4GB swap, gradual memory reclaim) and
-   guest-side (`vm.swappiness=10`). Every ledger-9 service now carries a
-   `mem_limit` with `memswap_limit` equal to it, so a container leak is contained
-   instead of triggering a global OOM that kills the prover mid-proof. Measured
-   peaks are in the compose header; nothing came within 6× of its cap.
+   wallet SDK plus WASM prover), not a container. The VM had far more swap than
+   memory, on a virtual disk, so it paged for minutes instead of failing fast.
+   Fixed by capping the VM's memory, keeping swap small, enabling gradual memory
+   reclaim, and setting `vm.swappiness=10` in the guest. Every ledger-9 service
+   now carries a `mem_limit` with `memswap_limit` equal to it, so a container leak
+   is contained instead of triggering a global OOM that kills the prover
+   mid-proof. Measured peaks are in the compose header; nothing came within 6× of
+   its cap.
 
 2. **A stale wallet sync cache hangs the deploy forever, silently.** FIXED — see open
    question 9. Cost 16 minutes on a run that takes 45 seconds, and it looks exactly like a
@@ -353,5 +393,8 @@ Re-read the design law start-to-finish before building it.
   after any image bump, suspect the ledger patch version first ([[03-midnight-toolchain]]).
 - `.midnight-attester.json` is a SIGNING KEY (mode 0600, gitignored). Losing it means
   redeploying, since the contract has no rotation circuit.
+- **`npm run prime` after every `npm run deploy`.** A fresh devnet is a fresh chain, so the
+  cached scenario records stop describing it; `GET /scenarios` will report a non-`current`
+  status and serve no records until it is re-run.
 - Deadline Wave 1: 2026-09-16.
 - The contract is the product; CLI comes with it; web is the demo skin.
