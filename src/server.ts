@@ -33,6 +33,7 @@
 
 import * as http from 'node:http';
 
+import { fetchGenesisHash } from './chain-identity';
 import {
   connectFreeboard,
   type CheckInput,
@@ -41,7 +42,9 @@ import {
   type LedgerView,
   type StagedCheck,
 } from './freeboard-client';
-import { resolveNetwork } from './network';
+import { getDeployment, resolveNetwork } from './network';
+import { loadResults, type ScenarioRecord } from './results-cache';
+import { SCENARIOS } from './scenarios';
 
 const HOST = '127.0.0.1';
 const PORT = Number(process.env.FREEBOARD_PORT ?? 4310);
@@ -180,6 +183,59 @@ async function verdict(): Promise<{ ledger: LedgerView | null }> {
 }
 
 /**
+ * The preset scenarios, each with the record of when it was last proved.
+ *
+ * Like /health, this deliberately does NOT connect. A cached record that waits on
+ * a wallet sync has bought nothing, so everything here is one file read, one
+ * deploy-record read and one JSON-RPC call.
+ *
+ * These records are the authority for their own scenario; /verdict is a SEPARATE
+ * current-chain-state view of the single `lastVerdict` slot. results-cache.ts
+ * explains why they cannot be the same thing.
+ */
+async function scenarios(): Promise<Record<string, unknown>> {
+  const { network, config } = resolveNetwork();
+  const deployment = getDeployment(network);
+
+  // Short timeout on purpose: this endpoint paints a page. A node that is not
+  // answering should degrade to `chain-unknown` promptly rather than hold the
+  // request open for the RPC default.
+  let genesisHash: string | null = null;
+  try {
+    genesisHash = await fetchGenesisHash(config.node, { timeoutMs: 2_500 });
+  } catch {
+    genesisHash = null;
+  }
+
+  const { cache, status } = loadResults(genesisHash, deployment?.address ?? null);
+  const byId = new Map<string, ScenarioRecord>((cache?.scenarios ?? []).map((r) => [r.id, r]));
+
+  return {
+    chain: { network, genesisHash, contractAddress: deployment?.address ?? null },
+    cache: {
+      status,
+      network: cache?.network ?? null,
+      genesisHash: cache?.genesisHash ?? null,
+      contractAddress: cache?.contractAddress ?? null,
+      /** Records on disk, whatever their binding says. Non-zero with a non-`current`
+       *  status is the "re-run npm run prime" case. */
+      records: cache?.scenarios.length ?? 0,
+    },
+    scenarios: SCENARIOS.map((s) => ({
+      id: s.id,
+      label: s.label,
+      summary: s.summary,
+      liveOnly: s.liveOnly,
+      input: s.input,
+      // Populated ONLY when the binding holds, so a record from a dead chain can
+      // never be rendered as though it were current. `liveOnly` scenarios never
+      // carry one at all.
+      cached: status === 'current' ? byId.get(s.id) ?? null : null,
+    })),
+  };
+}
+
+/**
  * Stage and prove one check.
  *
  * The staged view goes back alongside the result because the tamper demo is only
@@ -218,10 +274,14 @@ async function route(req: http.IncomingMessage, res: http.ServerResponse): Promi
   const path = new URL(req.url ?? '/', `http://${HOST}:${PORT}`).pathname;
 
   if (method === 'GET' && path === '/health') return send(res, 200, health());
+  if (method === 'GET' && path === '/scenarios') return send(res, 200, await scenarios());
   if (method === 'GET' && path === '/verdict') return send(res, 200, await verdict());
   if (method === 'POST' && path === '/check') return send(res, 200, await check(await readJsonBody(req)));
 
-  send(res, 404, { error: 'not found', routes: ['GET /health', 'GET /verdict', 'POST /check'] });
+  send(res, 404, {
+    error: 'not found',
+    routes: ['GET /health', 'GET /scenarios', 'GET /verdict', 'POST /check'],
+  });
 }
 
 const server = http.createServer((req, res) => {
@@ -274,9 +334,9 @@ server.listen(PORT, HOST, () => {
   process.stdout.write(
     `\n  freeboard service on http://${HOST}:${PORT}  (network: ${network})\n` +
       '  loopback only, no auth — it holds a signing key. See the header comment.\n' +
-      '  GET /health   GET /verdict   POST /check\n\n' +
-      '  The wallet connects on the first /verdict or /check and is then held for\n' +
-      '  the life of this process.\n\n',
+      '  GET /health   GET /scenarios   GET /verdict   POST /check\n\n' +
+      '  /health and /scenarios answer without connecting. The wallet connects on\n' +
+      '  the first /verdict or /check and is then held for the life of this process.\n\n',
   );
 });
 
