@@ -332,6 +332,7 @@ generated state.
 | `npm run deploy`        | Deploy the compiled contract (requires devnet up + compiled).  |
 | `npm run cli`           | Run solvency checks / read verdicts. Interactive, or `--check` / `--read` / `--tamper` for one-shot. |
 | `npm run check-balance` | Print the genesis-seed wallet's NIGHT and DUST balances.       |
+| `npm run test:cache`    | Pure check on wallet-cache chain binding. No devnet needed.    |
 | `npm run test:e2e`      | Read-back check: contract is live, and its public state leaks no position. |
 | `npm run clean`         | Remove `contracts/managed/`, `.midnight-state.json`, `.midnight-attester.json`, and `.midnight-wallet-state/`. |
 | `npm run devnet:start` / `:stop` / `:clean` | Ledger-9 devnet lifecycle (`:clean` also drops volumes). |

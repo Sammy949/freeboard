@@ -21,7 +21,8 @@
     "devnet8:start": "docker compose -f docker-compose.yml up -d --wait",
     "devnet8:stop": "docker compose -f docker-compose.yml down",
     "clean": "rm -rf contracts/managed .midnight-state.json .midnight-attester.json .midnight-wallet-state midnight-level-db",
-    "test": "echo \"Error: no test specified\" && exit 1",
+    "test": "npm run test:cache",
+    "test:cache": "tsx scripts/cache-check.ts",
     "test:e2e": "tsx scripts/e2e-check.ts"
   },
   "dependencies": {

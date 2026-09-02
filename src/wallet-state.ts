@@ -10,6 +10,18 @@
 // after a transient failure. The SDK exposes serializeState() and restore()
 // on each child wallet class; wallet.ts is the glue that uses them, and this
 // file is the on-disk format underneath.
+//
+// A cache is only valid for the chain it was built against, and nothing in the
+// serialized blobs says which chain that was. Restoring a cache onto a
+// different chain does not error — it HANGS, because the wallet waits for a
+// checkpoint the new genesis has never heard of (measured 2026-09-01: 16
+// minutes of `Still syncing...` with zero CPU, versus 45s from scratch). Local
+// devnets declare no volumes, so every restart is a new chain and reproduces
+// this. So the genesis hash is stored alongside the child states in `chain.json`
+// and `loadWalletState` REQUIRES the caller to pass the current one. It is a
+// positional parameter, not an option, specifically so the precondition cannot
+// be forgotten: there is no way to read this cache without saying which chain
+// you are on.
 
 import * as fs from 'node:fs';
 import * as path from 'node:path';
@@ -28,6 +40,16 @@ export interface PersistedWalletState {
   dust?: string;
 }
 
+/** Why a cache on disk was not used. `null` means it was (or there was none). */
+export type DiscardReason = 'chain-mismatch' | 'no-chain-record';
+
+export interface WalletStateLoad {
+  state: PersistedWalletState;
+  discarded: DiscardReason | null;
+  /** The genesis hash the on-disk cache was built against, when one is recorded. */
+  cachedGenesisHash?: string;
+}
+
 export interface FsOptions {
   cwd?: string;
 }
@@ -38,6 +60,10 @@ function networkDir(network: NetworkId, opts: FsOptions = {}): string {
 
 function statePath(network: NetworkId, kind: ChildKind, opts: FsOptions = {}): string {
   return path.join(networkDir(network, opts), `${kind}.json`);
+}
+
+function chainPath(network: NetworkId, opts: FsOptions = {}): string {
+  return path.join(networkDir(network, opts), 'chain.json');
 }
 
 function atomicWrite(file: string, content: string): void {
@@ -71,22 +97,57 @@ function writeVersionedState<T>(file: string, state: T): void {
   atomicWrite(file, `${JSON.stringify(payload)}\n`);
 }
 
-export function loadWalletState(network: NetworkId, opts: FsOptions = {}): PersistedWalletState {
+/**
+ * Read the cache for `network`, but only if it was built against
+ * `genesisHash`. A cache with no chain record is treated as untrustworthy
+ * rather than assumed-current: it predates this check, so nothing proves which
+ * chain it came from, and guessing wrong costs a silent hang.
+ */
+export function loadWalletState(
+  network: NetworkId,
+  genesisHash: string,
+  opts: FsOptions = {},
+): WalletStateLoad {
+  const cached = readVersionedState<string>(chainPath(network, opts));
+
+  if (cached === undefined) {
+    // No record at all. If there is also no cache, this is a clean first run and
+    // there is nothing to report; only call it a discard if state exists.
+    const hasState = CHILD_KINDS.some((k) => fs.existsSync(statePath(network, k, opts)));
+    return { state: {}, discarded: hasState ? 'no-chain-record' : null };
+  }
+
+  if (cached !== genesisHash) {
+    return { state: {}, discarded: 'chain-mismatch', cachedGenesisHash: cached };
+  }
+
   return {
-    shielded: readVersionedState(statePath(network, 'shielded', opts)),
-    unshielded: readVersionedState(statePath(network, 'unshielded', opts)),
-    dust: readVersionedState<string>(statePath(network, 'dust', opts)),
+    state: {
+      shielded: readVersionedState(statePath(network, 'shielded', opts)),
+      unshielded: readVersionedState(statePath(network, 'unshielded', opts)),
+      dust: readVersionedState<string>(statePath(network, 'dust', opts)),
+    },
+    discarded: null,
+    cachedGenesisHash: cached,
   };
 }
 
+/**
+ * Persist the cache together with the genesis hash it belongs to. The chain
+ * record is written LAST: if the process dies mid-write, the next run sees a
+ * chain record that does not match the half-written children (or none at all)
+ * and re-syncs, rather than restoring a torn cache.
+ */
 export function saveWalletState(
   network: NetworkId,
   state: PersistedWalletState,
+  genesisHash: string,
   opts: FsOptions = {},
 ): void {
   if (state.shielded !== undefined) writeVersionedState(statePath(network, 'shielded', opts), state.shielded);
   if (state.unshielded !== undefined) writeVersionedState(statePath(network, 'unshielded', opts), state.unshielded);
   if (state.dust !== undefined) writeVersionedState(statePath(network, 'dust', opts), state.dust);
+  writeVersionedState(chainPath(network, opts), genesisHash);
 }
 
 export function clearWalletState(network: NetworkId, opts: FsOptions = {}): void {
