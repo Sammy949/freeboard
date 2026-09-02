@@ -35,7 +35,10 @@
     "@midnight-ntwrk/midnight-js-utils": "5.0.0-beta.7",
     "@midnight-ntwrk/wallet-sdk": "2.0.0-beta.2",
     "@scure/bip39": "2.2.0",
+    "boxen": "8.0.1",
+    "chalk": "6.0.0",
     "cross-fetch-real": "npm:cross-fetch@4.1.0",
+    "ora": "9.4.1",
     "rxjs": "^7.8.2",
     "ws": "^8.21.1"
   },
@@ -52,5 +55,10 @@
     "@midnight-ntwrk/wallet-sdk-utilities": "1.2.1",
     "cross-fetch": "file:./patches/cross-fetch"
   },
-  "keywords": ["midnight", "blockchain", "zero-knowledge", "privacy"]
+  "keywords": [
+    "midnight",
+    "blockchain",
+    "zero-knowledge",
+    "privacy"
+  ]
 }
