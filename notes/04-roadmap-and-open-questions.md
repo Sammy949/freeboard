@@ -64,9 +64,11 @@ Freeboard verdict as proof of a real position until that swap happens.
 3. ~~**Write `freeboard.compact` v1**~~ ✅ ~~**v2 Schnorr attestation**~~ ✅
 4. ~~**Exercise via CLI on local devnet**~~ ✅ deploy + 3 verified checks + e2e.
 5. ~~**CLI polish + shared client extraction**~~ ✅ (2026-08-30, see below).
-6. **NEXT: the dashboard, then public testnet.** Single-page demo over
-   `src/freeboard-client.ts`, then deploy to `preview` with Lace. Open question 3
-   (HF parity with Anchor) is worth settling before the UI hardcodes a formula.
+6. ~~**Local service + proved-once results cache**~~ ✅ (2026-09-02) — `npm run serve`,
+   `npm run prime`, all three outcomes exercised over HTTP against a live chain.
+7. **NEXT: the dashboard, then public testnet.** Single page over the local service,
+   then deploy to `preview` with Lace. Open question 3 is settled, so the UI may
+   hardcode `collateral × liqThresholdBps ≥ minHealthFactorBps × debt`.
 
 **v1 mechanic (done):** private position witnesses, one public input
 `minHealthFactorBps: Uint<32>`, division-free solvency check
@@ -282,13 +284,41 @@ mid-click), and `GET /scenarios`, which answers WITHOUT connecting for the same
 reason `/health` does: a cached record that waits on a wallet sync has bought
 nothing.
 
-**Verified 2026-09-02:** `npm run test:cache` is 27 assertions (was 13), covering
-every binding-failure path plus the scenario-set invariants; `npx tsc --noEmit`
-clean; `/scenarios` exercised against the running service in 35ms with the devnet
-down, and again with synthetic records on disk to confirm `cached` stays null under
-`chain-unknown`. **NOT verified: a real `npm run prime`** — the devnet is down (no
-docker daemon on this box), so no proof has been cached yet. Run it after the next
-`npm run deploy`.
+**Verified 2026-09-02, end to end on a live chain.** Devnet up, fresh deploy
+(`c847e801…` on genesis `0x635663c0…`), then `npm run prime` on its first ever
+real run: healthy → ✅ SAFE at block 1727, undercollateralised → ⚠️ AT_RISK at
+block 1732, cache written, both records carrying real tx ids.
+
+The property the whole design exists for, now with live numbers rather than an
+argument: the ledger reads `at_risk` with `checkCount 2` and
+`lastAttestationAt 1788346791`, which is the AT-RISK record's `asOf` — not the
+SAFE record's `1788346769`. So a page that re-read the ledger for the healthy
+preset would have shown AT_RISK for a position at HF 2.1250. The `asOf` match is
+also exactly how the UI identifies which record the ledger currently reflects,
+and it works.
+
+`GET /scenarios` answers in **8.5ms** with `status: current` and both records
+populated; the tampered scenario carries none, as designed. `GET /verdict` came
+back in 1.4s rather than minutes because the wallet cache was warm and
+genesis-bound — the a3927f4 guard paying for itself.
+
+**The tampered live action costs 0.4 seconds, not 45.** `POST /check` with
+`tamper: true` returned `rejected-in-circuit` with the contract's own text
+("position is not signed by the registered attester"), `signed.collateral`
+1,000,000 against `submitted.collateral` 1,000,000,000, and `validLocally: false`.
+The assert fires during circuit execution, before a proof is built and before any
+transaction, so the rejection never costs the 45 seconds an accepted check does.
+`/verdict` afterwards is byte-identical: still `at_risk`, still `checkCount 2`,
+same `lastAttestationAt`. Nothing was written.
+
+That last measurement removes the only real objection to keeping the tamper case
+live: there is no wait to design around. The expensive path is the accepted one,
+and those are the two that are cached.
+
+Earlier verification (unchanged): `npm run test:cache` is 27 assertions covering
+every binding-failure path plus the scenario-set invariants, `npx tsc --noEmit`
+clean, and `/scenarios` was exercised with the devnet down and with synthetic
+records on disk to confirm `cached` stays null under `chain-unknown`.
 
 shadcn preset to scaffold with (already run, recorded for reproducibility):
 ```
@@ -350,9 +380,34 @@ reading like it started one service. Added `devnet:ps` and `devnet:stop-all`.
    enforced in-circuit. Adding a public `minAttestationAt: Uint<64>` arg + `assert(asOf >= it)`
    is ~2 lines; held back until question 1 fixes the `asOf` convention, since a floor
    compared against the wrong unit is worse than none.
-3. **Exact HF formula parity with Anchor.** Confirm Anchor's health-factor definition
-   (per-asset liquidation thresholds? single aggregate?) so Freeboard matches the domain
-   Samuel already owns. Pull it from the Anchor codebase.
+3. ~~**Exact HF formula parity with Anchor.**~~ **SETTLED 2026-09-02: aggregate, single
+   threshold. The circuit already matches and needs no change.** Anchor reads Aave v3's
+   `getUserAccountData(address)` and nothing else — its own ABI comment says "Minimal ABI: we
+   only need the aggregate account view" (`src/aave.ts`). That call returns
+   `totalCollateralBase`, `totalDebtBase` and ONE `currentLiquidationThreshold`, which is
+   Aave's own liquidity-weighted average across the user's collateral, and `src/risk.ts`
+   states the formula as `HF = (collateral * liquidationThreshold) / debt`. There is no
+   per-asset path anywhere in the repo; the only mention of "per-asset" is the disclaimer that
+   `liquidationDistance` is "a first-order, whole-basket estimate" and deliberately does not
+   imply per-asset precision. So `collateral * liqThresholdBps >= minHealthFactorBps * debt`
+   is Anchor's definition exactly, and the dashboard may hardcode it.
+
+   Three things a real attester has to get right, now that the mapping is fixed:
+   - **Pass Aave's `currentLiquidationThreshold` VERBATIM.** It is already in bps (8500 = 85%),
+     which is exactly what `liquidationThresholdBps: Uint<16>` wants. Anchor divides it by
+     `10^4` for its own API only. Aave's ceiling is 10000, so the Uint<16> has room.
+   - **Collateral and debt are Aave BASE-CURRENCY integers at 8 decimals** (`USD_DECIMALS`),
+     not floats and not token amounts. Pass the raw `totalCollateralBase` / `totalDebtBase`.
+     `Uint<64>` tops out near 1.8e19, so at 8dp the ceiling is about $184bn of collateral —
+     fine, but it is a real ceiling and the attester should reject above it rather than wrap.
+   - **Zero debt.** Aave returns `type(uint256).max` for HF; Anchor maps that to `null` and
+     labels it NONE, the circuit maps `debt == 0` to SAFE. Same fact, and SAFE is the right
+     answer for a solvency verdict. No divergence to reconcile.
+
+   Worth stating in the pitch rather than leaving as coincidence: the demo's default bar,
+   `minHealthFactorBps` 15000 = HF 1.5, is exactly Anchor's boundary between `AT_RISK` and
+   `MODERATE` (`src/risk.ts` labels: <1 LIQUIDATABLE, <1.1 CRITICAL, <1.5 AT_RISK, <2
+   MODERATE). The two projects already agree on where "safe" starts.
 4. **Binary verdict vs band for Wave 1.** Default = binary (least leakage). Band only if we
    also control query frequency (trajectory-leak risk).
 5. **Threshold ownership UX.** Verifier sets threshold — how is it agreed/encoded in a real
