@@ -30,6 +30,7 @@ import chalk from 'chalk';
 import ora from 'ora';
 import boxen from 'boxen';
 
+import { TAGLINE, WORDMARK, WORDMARK_WIDTH } from './banner';
 import { resolveNetwork, getOrCreateWallet, formatWalletBackupNotice, isLocalDevnet } from './network';
 import { formatVerifyingKey } from './attester';
 import {
@@ -68,6 +69,16 @@ function field(label: string, value: string): string {
 
 /** Informational chatter: present, but never competing with the answer. */
 const info = (s: string) => chalk.dim(s);
+
+/**
+ * A labelled rule, sized to the wordmark so every horizontal line in the CLI ends
+ * in the same column as the mark above it. Derived rather than typed out, because
+ * a hand-counted run of dashes drifts the moment the mark or the label changes.
+ */
+function rule(label: string): string {
+  const head = `─── ${label} `;
+  return head + '─'.repeat(Math.max(0, WORDMARK_WIDTH - [...head].length));
+}
 
 /** Reads a non-negative integer, re-prompting rather than accepting NaN. */
 async function askBigInt(
@@ -151,6 +162,11 @@ function printLedger(l: LedgerView | null): void {
       titleAlignment: 'left',
       padding: { top: 1, bottom: 1, left: 2, right: 2 },
       margin: { top: 1, bottom: 1, left: 2, right: 0 },
+      // Sized so the box's right edge lands in the same column as the wordmark's,
+      // rather than wherever its longest line happens to end. Content-sized, it
+      // stopped three columns short of the mark, which reads as a miss rather than
+      // a choice. The 2 comes off for the left margin.
+      width: WORDMARK_WIDTH - 2,
       borderStyle: 'round',
       borderColor: l.verdict === 'safe' ? 'green' : 'red',
     }),
@@ -261,17 +277,16 @@ async function main() {
   // there — creating it would hold stdin open and the process would never exit.
   const interactive = !args.check && !args.read;
 
-  // The banner stays hand-drawn rather than boxen'd: boxen is reserved for the
-  // verdict, so a border on the page means "this is the answer". The newlines sit
-  // OUTSIDE the chalk call — inside, chalk wraps the newline itself and emits a
-  // stray coloured blank line.
+  // The wordmark carries no border, and that is the point: boxen is reserved for
+  // the verdict, so exactly one thing in this CLI has a frame around it and a
+  // frame therefore means "this is the answer". The old banner undercut that by
+  // drawing its own box. Coloured line by line because a `\n` inside a chalk call
+  // emits a coloured blank line.
   console.log();
-  console.log(chalk.cyan('╔══════════════════════════════════════════════════════════════╗'));
-  console.log(
-    chalk.cyan('║  ') + chalk.bold('freeboard') + chalk.dim(' — private solvency proofs') +
-      chalk.cyan('                         ║'),
-  );
-  console.log(chalk.cyan('╚══════════════════════════════════════════════════════════════╝'));
+  for (const row of WORDMARK) console.log(chalk.cyan(row));
+  console.log();
+  console.log(chalk.dim(TAGLINE[0]));
+  console.log(chalk.dim(TAGLINE[1]));
   console.log();
 
   const rl = interactive ? createInterface({ input: stdin, output: stdout }) : null;
@@ -372,7 +387,7 @@ async function main() {
     } else {
       let running = true;
       while (running) {
-        console.log(chalk.dim('─── Menu ───────────────────────────────────────────────────────'));
+        console.log(chalk.dim(rule('Menu')));
         console.log(`  ${chalk.bold('1.')} Run a solvency check ${info('(attested)')}`);
         console.log(`  ${chalk.bold('2.')} Read the public verdict from the chain`);
         console.log(`  ${chalk.bold('3.')} Run a ${chalk.yellow('TAMPERED')} check ${info('(demonstrate in-circuit rejection)')}`);
