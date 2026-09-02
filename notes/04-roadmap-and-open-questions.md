@@ -212,7 +212,46 @@ through a Node-side API route over `freeboard-client.ts`, and an understated
 monospace technical footer. Proving cannot move into the browser: the wallet seed,
 the attester signing key and the proof-server call all live server-side.
 
-shadcn preset to scaffold with (noted, not yet run):
+**Scaffold status (checked 2026-09-02):** `web/` exists and the shadcn preset has
+been run — Next 16.3.3, React 19.2.8, Tailwind 4, Base UI, Phosphor icons, ~40
+`components/ui/*` primitives. But `app/page.tsx` is still stock Next boilerplate
+and there is no `route.ts` anywhere, so no product work has started. Note
+`web/AGENTS.md`: this Next version has breaking changes versus what a model is
+likely to know, so read `node_modules/next/dist/docs/` before writing Next code
+rather than working from memory. (Verified that way already: the config key is
+`serverExternalPackages`, not the pre-15 `serverComponentsExternalPackages`.)
+
+**SETTLED 2026-09-02 — how the web app reaches the SDK: a separate local
+service (`src/server.ts`, `npm run serve`), not an in-process Next import.**
+Three options were weighed; the other two were npm workspaces and duplicating the
+SDK into `web/`. What decided it:
+- `freeboard-client.ts` is hard server-only — `node:fs/path/url`,
+  `NodeZkConfigProvider` reading prover keys off disk, a LevelDB private-state
+  store that takes an EXCLUSIVE lock, the attester key, all relative to the repo
+  root as cwd — and the dependency tree carries a WASM binary
+  (`@midnight-ntwrk/zkir-v2`). Keeping that out of Turbopack's module graph costs
+  nothing and avoids `serverExternalPackages`, `transpilePackages`, and an
+  ESM-vs-`require` argument over six packages.
+- `connectFreeboard()` is expensive and its own docstring says a web server should
+  hold one per process. Next re-evaluates route handlers on edit, so a wallet held
+  in a route module is discarded on every save — a re-sync per keystroke while
+  building UI. A separate process survives UI work.
+- The signing key and wallet seed cannot reach a client bundle by construction
+  rather than by care.
+- The demo is local-only regardless, because the proof server is a container on
+  this machine. Two processes makes that honest instead of implying deployability.
+- Version skew across two SDK copies is the exact class of bug that already cost
+  this project two debugging cycles, which is what ruled out duplication.
+
+The Next side still gets a thin route handler as the public surface, so the
+browser only ever talks to Next and the architecture line above still holds.
+
+**Not settled: whether each preset triggers a live 30-60s proof or the page proves
+once and then re-reads the ledger.** Deferred to the design pass on purpose — a
+30-60s wait is a composition problem before it is an engineering one, and the
+spinner state has to be designed rather than apologised for.
+
+shadcn preset to scaffold with (already run, recorded for reproducibility):
 ```
 npx shadcn@latest init --preset b7ClQ5x34 --template next
 bunx --bun shadcn@latest init --preset b7ClQ5x34 --template next

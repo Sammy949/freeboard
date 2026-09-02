@@ -11,6 +11,7 @@
     "setup": "npx tsx src/setup.ts",
     "deploy": "npx tsx src/deploy.ts",
     "cli": "npx tsx src/cli.ts",
+    "serve": "npx tsx src/server.ts",
     "check-balance": "npx tsx src/check-balance.ts",
     "network": "npx tsx src/network.ts",
     "devnet:start": "docker compose -f docker-compose.ledger9.yml up -d --wait",

@@ -331,6 +331,7 @@ generated state.
 | `npm run compile`       | Compile the Compact contract.                                  |
 | `npm run deploy`        | Deploy the compiled contract (requires devnet up + compiled).  |
 | `npm run cli`           | Run solvency checks / read verdicts. Interactive, or `--check` / `--read` / `--tamper` for one-shot. |
+| `npm run serve`         | Local HTTP service over the same client, for the web demo. **Loopback only, no auth** — it holds the attester signing key. One synced wallet per process; checks are serialized. |
 | `npm run check-balance` | Print the genesis-seed wallet's NIGHT and DUST balances.       |
 | `npm run test:cache`    | Pure check on wallet-cache chain binding. No devnet needed.    |
 | `npm run test:e2e`      | Read-back check: contract is live, and its public state leaks no position. |
