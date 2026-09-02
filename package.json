@@ -16,8 +16,10 @@
     "devnet:start": "docker compose -f docker-compose.ledger9.yml up -d --wait",
     "devnet:stop": "docker compose -f docker-compose.ledger9.yml down",
     "devnet:clean": "docker compose -f docker-compose.ledger9.yml down -v",
-    "proof-server:start": "docker compose up -d",
-    "proof-server:stop": "docker compose down",
+    "devnet:ps": "docker ps -a --filter name=freeboard",
+    "devnet:stop-all": "docker compose -f docker-compose.ledger9.yml down; docker compose -f docker-compose.yml down",
+    "devnet8:start": "docker compose -f docker-compose.yml up -d --wait",
+    "devnet8:stop": "docker compose -f docker-compose.yml down",
     "clean": "rm -rf contracts/managed .midnight-state.json .midnight-attester.json .midnight-wallet-state midnight-level-db",
     "test": "echo \"Error: no test specified\" && exit 1",
     "test:e2e": "tsx scripts/e2e-check.ts"

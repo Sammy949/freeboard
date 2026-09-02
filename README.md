@@ -335,7 +335,9 @@ generated state.
 | `npm run test:e2e`      | Read-back check: contract is live, and its public state leaks no position. |
 | `npm run clean`         | Remove `contracts/managed/`, `.midnight-state.json`, `.midnight-attester.json`, and `.midnight-wallet-state/`. |
 | `npm run devnet:start` / `:stop` / `:clean` | Ledger-9 devnet lifecycle (`:clean` also drops volumes). |
-| `npm run proof-server:start` / `:stop` | Compose lifecycle for just the ledger-8 proof-server service. |
+| `npm run devnet:ps`     | Show every freeboard container, both stacks, running or not.   |
+| `npm run devnet:stop-all` | Bring down both stacks. Use this if you are unsure what is up. |
+| `npm run devnet8:start` / `:stop` | Ledger-8 fallback stack. **Never run alongside the ledger-9 stack** — two nodes, two indexers and two proof servers exhaust a 16GB laptop. Was named `proof-server:start`, which implied it started only a proof server; it starts all three services. |
 
 (See **Repo layout** near the top for the current structure.)
 

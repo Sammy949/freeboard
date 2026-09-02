@@ -1,6 +1,17 @@
 # Local Midnight devnet for freeboard
 # LOCAL DEVELOPMENT ONLY — do not expose these ports to a public network.
 # Tear down with: docker compose down -v
+#
+# THIS IS THE LEDGER-8 FALLBACK. The stack in use is docker-compose.ledger9.yml.
+# Up:   npm run devnet8:start     Down: npm run devnet8:stop
+#
+# ⚠ NEVER RUN THIS ALONGSIDE THE LEDGER-9 STACK. Two nodes, two indexers (each
+# with its own postgres) and two proof servers do not fit in a 16GB laptop's WSL
+# VM, and on 2026-08-29 both were up at once and the VM ran out of memory. The
+# ports are offset so they CAN coexist; that is not the same as should.
+# These scripts used to be named `proof-server:start` / `proof-server:stop`,
+# which read as "start a proof server" while actually starting this whole stack.
+# Renamed 2026-09-01. `npm run devnet:stop-all` brings both down.
 name: freeboard-devnet
 
 services:
@@ -40,10 +51,14 @@ services:
     # for the future ledger-9/node-2 line, not stable releases.
     image: midnightntwrk/indexer-standalone:4.3.3
     container_name: freeboard-indexer
-    # The node healthcheck above guarantees block 1 exists before this
-    # container starts (see comment there). restart: on-failure is kept as a
-    # second layer for plain `docker compose up -d` flows without --wait.
-    restart: on-failure
+    # NO restart POLICY, deliberately. The node healthcheck above plus the
+    # depends_on below already guarantee block 1 exists before this container
+    # starts, so `restart: on-failure` was only a second layer for a plain
+    # `docker compose up -d` without --wait — a path both start scripts stopped
+    # taking. Its cost was worse than the gap it covered: a container left
+    # behind by a crash gets resurrected when the Docker daemon next starts, so
+    # on 2026-09-01 `systemctl start docker` brought BOTH stacks' indexers up on
+    # its own. Removed 2026-09-01; see notes/04, Devnet operations.
     ports:
       - "8088:8088"
     environment:
