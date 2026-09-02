@@ -28,6 +28,7 @@
     "test:e2e": "tsx scripts/e2e-check.ts"
   },
   "dependencies": {
+    "@clack/prompts": "1.7.0",
     "@midnight-ntwrk/compact-runtime": "0.19.0-rc.0",
     "@midnight-ntwrk/midnight-js-contracts": "5.0.0-beta.7",
     "@midnight-ntwrk/midnight-js-http-client-proof-provider": "5.0.0-beta.7",
@@ -40,10 +41,9 @@
     "@midnight-ntwrk/midnight-js-utils": "5.0.0-beta.7",
     "@midnight-ntwrk/wallet-sdk": "2.0.0-beta.2",
     "@scure/bip39": "2.2.0",
-    "boxen": "8.0.1",
     "chalk": "6.0.0",
     "cross-fetch-real": "npm:cross-fetch@4.1.0",
-    "ora": "9.4.1",
+    "fast-string-width": "3.0.2",
     "rxjs": "^7.8.2",
     "ws": "^8.21.1"
   },

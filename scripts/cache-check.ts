@@ -14,7 +14,7 @@ import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 
-import { TAGLINE, WORDMARK, WORDMARK_WIDTH } from '../src/banner';
+import { displayWidth, frameLines, TAGLINE, WORDMARK, WORDMARK_WIDTH } from '../src/banner';
 import { toHttpRpcUrl } from '../src/chain-identity';
 import {
   clearResults,
@@ -208,6 +208,30 @@ async function main(): Promise<void> {
     TAGLINE.map((t) => [...t].length).join(','));
   check('the wordmark carries no newlines (chalk would emit coloured blank lines)',
     WORDMARK.every((r) => !r.includes('\n')));
+
+  console.log('\nVerdict frame');
+  // Asserted because the first version was one column wrong and only measuring found
+  // it: `✅` is ONE code point and TWO terminal columns, so a code-point count padded
+  // the verdict row a column short and its right border sat past every other row.
+  // The emoji rows are the point of this test, not an incidental fixture.
+  const frame = frameLines('Public ledger state — all a verifier can see', [
+    'Verdict:          ✅ SAFE',
+    'Verdict:          ⚠️  AT_RISK',
+    'Checks performed: 2',
+    '',
+    '↳ note what is NOT here: no collateral, no debt, no threshold.',
+  ]);
+  const frameWidths = [...new Set(frame.map((l) => displayWidth(l)))];
+  check(`every row is ${WORDMARK_WIDTH} columns, emoji included`,
+    frameWidths.length === 1 && frameWidths[0] === WORDMARK_WIDTH, frameWidths.join(','));
+  check('the frame is closed top and bottom',
+    frame[0].startsWith('╭') && frame[0].endsWith('╮') &&
+    frame[frame.length - 1].startsWith('╰') && frame[frame.length - 1].endsWith('╯'));
+  check('the title survives in the top border', frame[0].includes('Public ledger state'));
+  // A title longer than the frame must not push the border out; it clamps instead.
+  const long = frameLines('x'.repeat(200), ['body']);
+  check('an over-long title cannot widen the frame',
+    displayWidth(long[long.length - 1]) === WORDMARK_WIDTH, String(displayWidth(long[0])));
 
   fs.rmSync(cwd, { recursive: true, force: true });
 

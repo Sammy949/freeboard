@@ -139,10 +139,72 @@ and pass the pubkey in. The witness impls must return the SAME numbers the attes
 signed, in the same order, or every call fails the assert.
 
 
+## CLI rebuilt on clack (2026-09-02)
+
+`chalk` + `ora` + `boxen` + `readline` became `@clack/prompts` 1.7.0 (pinned) +
+`chalk` + `fast-string-width`. Net 27 fewer packages. The section below it records the
+2026-08-30 pass that this replaces; kept because the reasoning it states about borders
+and about the sync ticker still holds and is why several of clack's parts went unused.
+
+**What clack took.** `select()` for the menu, which deletes the numbered list, the
+readline question AND the "Invalid choice. Enter 1-5." branch — an out-of-range answer
+is no longer reachable, and the parenthetical asides became real `hint` fields.
+`text({ validate, defaultValue })` for each position number, replacing a `for(;;)`
+re-prompt loop. `spinner({ indicator: 'timer' })` for the prove-and-submit wait.
+`isCancel` for cancellation, which the CLI previously had none of. Plus its `S_*` glyph
+constants, so every status line, prompt and frame draws from one vocabulary.
+
+**Two bugs fixed on the way, both found by reading rather than by failing.**
+1. **Ctrl-C leaked the LevelDB lock.** `client.close()` sat inside the `try` after the
+   menu loop, so an interrupt or any throw skipped it, and the private-state store
+   stayed locked against the next run — the exact failure `server.ts` guards against.
+   `client` is now declared outside the try and closed in `finally`. Note clack's own
+   guidance is `process.exit(0)` at the cancel site; following it here would have
+   reproduced the bug, so cancelling throws a `CancelledError` and unwinds instead.
+2. **Unknown flags were silently ignored.** `--colateral 5000000` ran with the DEFAULT
+   collateral and reported a verdict for numbers nobody asked for. `parseArgs` now
+   throws on any unrecognised `--flag`.
+
+**Three things measured about clack that its docs get wrong or omit.** All three
+changed the design, so they are worth stating rather than leaving in the diff.
+- **`withGuide: false` strips log's state SYMBOLS along with the guide bar**, and the
+  per-call `symbol` option is ignored once the guide is off, so `log.step('x')` prints
+  a blank line and then `x`. That is less than `console.log`. With the guide ON the
+  symbols return and the `│` gutter comes with them — and that gutter is the most
+  recognisable thing about any clack CLI, fighting a wordmark and a frame that both
+  start at column 0. So `log.*` is unused: the layout is ours, only the glyphs are
+  clack's.
+- **`box()` ignores a numeric `width`.** Documented as `number | 'auto'`; measured at
+  30, 73 and 100, all three render at the full terminal width, and only `'auto'`
+  responds (sizing to content, which lands short of the mark). Its `rounded` option
+  documents `@default true` and defaults to square. So the verdict frame is
+  `frameLines()` in `banner.ts`, exactly `WORDMARK_WIDTH` columns, glyphs borrowed.
+- **Nothing in three doc pages mentions non-TTY behaviour**, but the package exports
+  `isTTY(output)` and `isCI()`. The spinner and the sync ticker are both gated on
+  `isTTY(process.stdout)` now, so piped output no longer carries `\r` artefacts.
+
+**`✅` is one code point and two terminal columns**, which padded the verdict row a
+column short and pushed its right border past every other row. Fixed with
+`fast-string-width` (what clack measures with, now a direct dependency), and asserted:
+`test:cache` is 39 assertions across seven sections, and the frame test deliberately
+includes emoji rows because a code-point count passes without them.
+
+**Verified live**, fresh devnet, fresh deploy `5ed65f0f…`:
+- `tsc` clean, `test:cache` 39 assertions, `test:e2e` passed — verdict safe,
+  checkCount 1, attester key matches, no position data in public state.
+- `--check --tamper --read`: the whole arc, ending in the 🛑 line and a frame whose
+  every row measures exactly 73 columns, emoji included.
+- **The cancel path, driven for real.** `\003` written to stdin at the menu: clack
+  showed its cancel state, the CLI printed `▲ Cancelled.` and exited 0. Then
+  `--read` immediately afterwards opened the store and read the ledger, which is the
+  proof that the lock was released rather than a reading of the code. Note `kill -INT`
+  does NOT exercise this — clack cancels on the stdin BYTE, not the signal.
+- `--colateral 5` now fails with `unknown flag: --colateral`.
+
 ## Wave 1 finishing pass (2026-08-30)
 
-### CLI polish — done
-`src/cli.ts` now dresses its output with `chalk` / `ora` / `boxen`. Presentation
+### CLI polish — superseded 2026-09-02, kept for the reasoning
+`src/cli.ts` dressed its output with `chalk` / `ora` / `boxen`. Presentation
 only: same five menu options, same order, same flags, same prompts.
 - The verdict block is the ONLY thing in a border. `boxen` means "this is the
   answer"; the banner stays hand-drawn so the box keeps that meaning. The
