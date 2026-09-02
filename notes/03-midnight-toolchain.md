@@ -210,7 +210,7 @@ a JS point-equality bugfix. So 0.31.1 would mean reverting v2 to v1 — trading 
 anti-theater core for a deployable demo. Not recommended; noted so the tradeoff is explicit
 rather than discovered late.
 (Also: installing 0.31.1 to test this failed twice here — `compact update 0.31` downloads
-~33MB then dies in `unzip` with "not enough memory for bomb detection" on this 7GB box.
+~33MB then dies in `unzip` with "not enough memory for bomb detection" under memory pressure.
 Direct CDN download 403s. Retry with more free RAM if we ever need it.)
 
 

@@ -5,6 +5,11 @@
  * to the circuit as witnesses → the circuit verifies the signature in-circuit,
  * computes the health factor privately, and writes ONLY a verdict to the ledger.
  *
+ * That flow itself now lives in src/freeboard-client.ts, because the web
+ * dashboard runs the same one and two copies of it would drift. THIS FILE IS
+ * PRESENTATION: prompts, colour, spinners, boxes. It decides how a result reads,
+ * never what a result is.
+ *
  * Runs interactively (a menu) or NON-INTERACTIVELY via flags. The non-interactive
  * path is not a convenience: an interactive-only CLI cannot be tested or scripted,
  * and piping answers into the menu does not work — stdin reaches EOF during the
@@ -16,140 +21,53 @@
  */
 import { createInterface } from 'node:readline/promises';
 import { stdin, stdout } from 'node:process';
-import * as fs from 'node:fs';
-import * as path from 'node:path';
-import { fileURLToPath, pathToFileURL } from 'node:url';
 import { WebSocket } from 'ws';
 
-// Midnight SDK imports
-import { findDeployedContract } from '@midnight-ntwrk/midnight-js-contracts';
-import { httpClientProofProvider } from '@midnight-ntwrk/midnight-js-http-client-proof-provider';
-import { indexerPublicDataProvider } from '@midnight-ntwrk/midnight-js-indexer-public-data-provider';
-import { levelPrivateStateProvider } from '@midnight-ntwrk/midnight-js-level-private-state-provider';
-import { NodeZkConfigProvider } from '@midnight-ntwrk/midnight-js-node-zk-config-provider';
-import { resolveNetwork, getOrCreateWallet, formatWalletBackupNotice, getDeployment, isLocalDevnet } from './network';
-import { createWallet, persistWalletState, unshieldedToken, type WalletContext } from './wallet';
-import { CompiledContract } from '@midnight-ntwrk/midnight-js-protocol/compact-js';
+// Presentation only. These wrap what the CLI prints; none of them touch the
+// proving or submission path. chalk auto-detects a non-TTY and emits plain text,
+// so piping to a file or a CI log stays readable.
+import chalk from 'chalk';
+import ora from 'ora';
+import boxen from 'boxen';
+
+import { resolveNetwork, getOrCreateWallet, formatWalletBackupNotice, isLocalDevnet } from './network';
+import { formatVerifyingKey } from './attester';
 import {
-  loadOrCreateAttesterKey,
-  signPosition,
-  verifyPosition,
-  formatVerifyingKey,
-  type Position,
-} from './attester';
-import { freeboardWitnesses, type AttestedPosition } from './witnesses';
+  connectFreeboard,
+  localHealthFactor,
+  ContractNotCompiledError,
+  NoDeploymentError,
+  type FreeboardClient,
+  type LedgerView,
+  type StagedCheck,
+} from './freeboard-client';
 
 // Enable WebSocket for GraphQL subscriptions
 // @ts-expect-error Required for wallet sync
 globalThis.WebSocket = WebSocket;
 
-// Must match the privateStateId used at deploy time, or this reconnects to a
-// different private-state store than the one the deployment registered.
-const PRIVATE_STATE_ID = 'freeboardPrivateState';
-
-const { network, config: networkConfig } = resolveNetwork();
-const WALLET = getOrCreateWallet(network);
-const SEED = WALLET.seed;
+const { network } = resolveNetwork();
 {
-  const notice = formatWalletBackupNotice(WALLET, network);
+  // Printed before anything else: a freshly generated mnemonic is the one thing
+  // here that cannot be recovered later.
+  const notice = formatWalletBackupNotice(getOrCreateWallet(network), network);
   if (notice) console.log(notice);
-}
-
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const zkConfigPath = path.resolve(__dirname, '..', 'contracts', 'managed', 'freeboard');
-const contractPath = path.join(zkConfigPath, 'contract', 'index.js');
-
-if (!fs.existsSync(contractPath)) {
-  console.error('\n❌ Contract not compiled! Run: npm run compile\n');
-  process.exit(1);
-}
-
-const Freeboard = await import(pathToFileURL(contractPath).href);
-
-// ─── The per-call witness slot ─────────────────────────────────────────────────
-//
-// Freeboard's witnesses are per-call, not durable state: each checkSolvency is
-// about one specific attested position. So the contract instance is built once
-// with a supplier that reads this slot, and each call fills the slot immediately
-// before invoking the circuit. Cleared afterwards so a stale position can never
-// silently serve a later call.
-let pendingAttestation: AttestedPosition | null = null;
-
-const witnesses = freeboardWitnesses(() => {
-  if (!pendingAttestation) {
-    throw new Error('No attested position staged — this is a bug in cli.ts, not bad input.');
-  }
-  return pendingAttestation;
-});
-
-// Called through `any` because the contract is imported dynamically: the
-// combinators' parameters are conditional types over the contract's own type,
-// which collapse to `never` once that type is `any`. Same reasoning as deploy.ts.
-const CC = CompiledContract as any;
-const compiledContract = CC.withCompiledFileAssets(
-  CC.withWitnesses(CC.make('freeboard', Freeboard.Contract), witnesses),
-  zkConfigPath,
-);
-
-// ─── Providers ─────────────────────────────────────────────────────────────────
-
-async function createProviders(walletCtx: WalletContext) {
-  // The SDK requires the private-state password to be at least 16 characters.
-  // The default below is a placeholder for local devnet only — set a strong
-  // password via PRIVATE_STATE_PASSWORD when you move to a non-local target.
-  const privateStatePassword = process.env.PRIVATE_STATE_PASSWORD?.trim() || 'Local-Devnet-Development-Placeholder-1';
-
-  const walletProvider = {
-    getCoinPublicKey: () => walletCtx.shieldedSecretKeys.coinPublicKey,
-    getEncryptionPublicKey: () => walletCtx.shieldedSecretKeys.encryptionPublicKey,
-    async balanceTx(tx: any, ttl?: Date) {
-      const recipe = await walletCtx.wallet.balanceUnboundTransaction(
-        tx,
-        { shieldedSecretKeys: walletCtx.shieldedSecretKeys, dustSecretKey: walletCtx.dustSecretKey },
-        { ttl: ttl ?? new Date(Date.now() + 30 * 60 * 1000) },
-      );
-      return walletCtx.wallet.finalizeRecipe(recipe);
-    },
-    submitTx: (tx: any) => walletCtx.wallet.submitTransaction(tx) as any,
-  };
-
-  const zkConfigProvider = new NodeZkConfigProvider(zkConfigPath);
-  const accountId = walletCtx.unshieldedKeystore.getBech32Address().toString();
-
-  return {
-    privateStateProvider: levelPrivateStateProvider({
-      privateStateStoreName: 'freeboard-state',
-      accountId,
-      privateStoragePasswordProvider: () => privateStatePassword,
-    }),
-    publicDataProvider: indexerPublicDataProvider(networkConfig.indexer, networkConfig.indexerWS),
-    zkConfigProvider,
-    proofProvider: httpClientProofProvider(networkConfig.proofServer, zkConfigProvider),
-    walletProvider,
-    midnightProvider: walletProvider,
-  };
 }
 
 // ─── Display helpers ──────────────────────────────────────────────────────────
 
-function verdictLine(v: number | bigint): string {
-  const n = Number(v);
-  return n === 1 ? '✅ SAFE' : '⚠️  AT_RISK';
+function verdictLine(v: 'safe' | 'at_risk' | null): string {
+  if (v === null) return chalk.dim('(see ledger)');
+  return v === 'safe' ? chalk.green.bold('✅ SAFE') : chalk.red.bold('⚠️  AT_RISK');
 }
 
-/**
- * The health factor, computed locally for DISPLAY ONLY.
- *
- * The circuit deliberately never discloses this — that is the entire point. It is
- * shown here because the CLI operator is the position owner and already knows
- * their own numbers. A verifier reading the chain sees only the verdict.
- */
-function localHealthFactor(p: Position): string {
-  if (p.debt === 0n) return '∞ (no debt)';
-  // ×10000 to keep integer math, then render as a ratio to 4 dp.
-  const hfBps = (p.collateral * p.liquidationThresholdBps) / p.debt;
-  return `${(Number(hfBps) / 10000).toFixed(4)}`;
+/** A key: value line — label bold, so the eye finds the values. */
+function field(label: string, value: string): string {
+  return `${chalk.bold(label.padEnd(18))}${value}`;
 }
+
+/** Informational chatter: present, but never competing with the answer. */
+const info = (s: string) => chalk.dim(s);
 
 /** Reads a non-negative integer, re-prompting rather than accepting NaN. */
 async function askBigInt(
@@ -210,19 +128,33 @@ function parseArgs(argv: string[]): CliArgs {
 
 // ─── Reading the public verdict ────────────────────────────────────────────────
 
-async function readLedger(providers: any, address: string): Promise<void> {
-  const contractState = await providers.publicDataProvider.queryContractState(address);
-  if (!contractState) {
-    console.log('\n  No contract state found at that address.\n');
+function printLedger(l: LedgerView | null): void {
+  if (!l) {
+    console.log(chalk.yellow('\n  No contract state found at that address.\n'));
     return;
   }
-  const l = Freeboard.ledger(contractState.data);
-  console.log('\n  ─── Public ledger state (all a verifier can see) ───');
-  console.log(`  Verdict:          ${verdictLine(l.lastVerdict)}`);
-  console.log(`  Attestation asOf: ${l.lastAttestationAt === 0n ? '(none yet)' : l.lastAttestationAt}`);
-  console.log(`  Checks performed: ${l.checkCount}`);
-  console.log(`  Attester key:     x=0x${l.attesterPk.x.toString(16).slice(0, 16)}…`);
-  console.log('  ↳ note what is NOT here: no collateral, no debt, no threshold.\n');
+  // The verdict block is the answer a verifier came for, so it gets a border and
+  // nothing else on the page does. The "what is NOT here" line stays inside the
+  // box: the absence is part of the result, not a footnote to it.
+  const body = [
+    field('Verdict:', verdictLine(l.verdict)),
+    field('Attestation asOf:', l.lastAttestationAt === null ? chalk.dim('(none yet)') : String(l.lastAttestationAt)),
+    field('Checks performed:', String(l.checkCount)),
+    field('Attester key:', chalk.dim(`x=0x${l.attesterPk.x.toString(16).slice(0, 16)}…`)),
+    '',
+    chalk.dim('↳ note what is NOT here: no collateral, no debt, no threshold.'),
+  ].join('\n');
+
+  console.log(
+    boxen(body, {
+      title: 'Public ledger state — all a verifier can see',
+      titleAlignment: 'left',
+      padding: { top: 1, bottom: 1, left: 2, right: 2 },
+      margin: { top: 1, bottom: 1, left: 2, right: 0 },
+      borderStyle: 'round',
+      borderColor: l.verdict === 'safe' ? 'green' : 'red',
+    }),
+  );
 }
 
 // ─── Running a solvency check ─────────────────────────────────────────────────
@@ -234,10 +166,29 @@ interface CheckOptions {
   preset?: { collateral?: bigint; debt?: bigint; threshold?: bigint; minHf?: bigint };
 }
 
+/** Narrates a staged check: what is private, what is public, what was tampered. */
+function printStaged(staged: StagedCheck): void {
+  if (staged.tampered) {
+    console.log(chalk.yellow('  ⚠ TAMPERING: inflating collateral ×1000 after signing.'));
+    console.log(info(`     signed collateral    = ${staged.signed.collateral}`));
+    console.log(info(`     submitted collateral = ${staged.submitted.collateral}`));
+  }
+
+  console.log(
+    `  ${chalk.bold('Local signature check:')} ${staged.validLocally ? chalk.green('valid') : chalk.red.bold('INVALID')}`,
+  );
+
+  if (!staged.validLocally) {
+    console.log(chalk.yellow('\n  Submitting anyway, to show the contract reject it in-circuit...'));
+  } else {
+    console.log(`\n  ${chalk.bold('Health factor')} ${info('(local, display only)')}: ${localHealthFactor(staged.submitted)}`);
+    console.log(`  ${chalk.bold('Threshold:')} ${(Number(staged.minHealthFactorBps) / 10000).toFixed(4)}`);
+  }
+}
+
 async function runCheck(
   rl: ReturnType<typeof createInterface> | null,
-  deployed: any,
-  attester: { signingKey: bigint; verifyingKey: any },
+  client: FreeboardClient,
   opts: CheckOptions = {},
 ): Promise<void> {
   const p = opts.preset ?? {};
@@ -247,7 +198,7 @@ async function runCheck(
 
   let collateral: bigint, debt: bigint, liquidationThresholdBps: bigint, minHealthFactorBps: bigint;
   if (rl) {
-    console.log('\n  Enter the position (blank = default). These stay PRIVATE.\n');
+    console.log(`\n  Enter the position (blank = default). These stay ${chalk.bold('PRIVATE')}.\n`);
     collateral = await askBigInt(rl, 'Collateral', p.collateral ?? DEFAULTS.collateral);
     debt = await askBigInt(rl, 'Debt', p.debt ?? DEFAULTS.debt);
     liquidationThresholdBps = await askBigInt(rl, 'Liquidation threshold (bps)', p.threshold ?? DEFAULTS.threshold);
@@ -257,61 +208,48 @@ async function runCheck(
     debt = p.debt ?? DEFAULTS.debt;
     liquidationThresholdBps = p.threshold ?? DEFAULTS.threshold;
     minHealthFactorBps = p.minHf ?? DEFAULTS.minHf;
-    console.log(`\n  Position (PRIVATE): collateral=${collateral} debt=${debt} threshold=${liquidationThresholdBps}bps`);
-    console.log(`  Verifier threshold (PUBLIC): ${minHealthFactorBps}bps`);
+    console.log(
+      `\n  ${chalk.bold('Position (PRIVATE):')} ${info(`collateral=${collateral} debt=${debt} threshold=${liquidationThresholdBps}bps`)}`,
+    );
+    console.log(`  ${chalk.bold('Verifier threshold (PUBLIC):')} ${minHealthFactorBps}bps`);
   }
 
-  // asOf is unix seconds — the convention is fixed by the attester (src/attester.ts).
-  const asOf = BigInt(Math.floor(Date.now() / 1000));
-  const position: Position = { collateral, debt, liquidationThresholdBps, asOf };
+  console.log(info('\n  Attester signs the position...'));
+  const staged = client.stage({
+    collateral,
+    debt,
+    liquidationThresholdBps,
+    minHealthFactorBps,
+    tamper: opts.tamper,
+  });
+  printStaged(staged);
 
-  console.log('\n  Attester signs the position...');
-  const signature = signPosition(position, attester.signingKey);
+  // A spinner replaces the static "30-60s" line: the wait is long enough that a
+  // frozen terminal reads as a hang.
+  const spinner = ora({ text: 'Proving and submitting (30-60s)...', prefixText: ' ' }).start();
+  const result = await client.submitCheck(staged);
 
-  // What the circuit will actually receive. When tampering, the signature stays
-  // valid for the ORIGINAL numbers while the witness carries different ones —
-  // exactly the attack the in-circuit check exists to stop.
-  const submitted: Position = opts.tamper
-    ? { ...position, collateral: position.collateral * 1000n }
-    : position;
+  switch (result.outcome) {
+    case 'accepted':
+      spinner.succeed(`Accepted. Verdict: ${verdictLine(result.verdict)}`);
+      console.log(info(`  Tx:    ${result.txId}`));
+      console.log(info(`  Block: ${result.blockHeight}\n`));
+      break;
 
-  if (opts.tamper) {
-    console.log('  ⚠ TAMPERING: inflating collateral ×1000 after signing.');
-    console.log(`     signed collateral   = ${position.collateral}`);
-    console.log(`     submitted collateral = ${submitted.collateral}`);
-  }
+    case 'rejected-in-circuit':
+      // A rejection here is the demo succeeding, so it is styled as a definite
+      // outcome rather than an error: 🛑, not ❌. ora's prefixText already
+      // supplies the indent, so the symbol must not add its own.
+      spinner.stopAndPersist({
+        symbol: '🛑',
+        text: chalk.red.bold('REJECTED IN-CIRCUIT: position is not signed by the registered attester.'),
+      });
+      console.log(info('     No verdict was written. This is the anti-theater check working.\n'));
+      break;
 
-  // Check locally first. The in-circuit assert is the real gate, but reaching it
-  // costs a proof and a transaction; failing here is instant and legible.
-  const validLocally = verifyPosition(submitted, attester.verifyingKey, signature);
-  console.log(`  Local signature check: ${validLocally ? 'valid' : 'INVALID'}`);
-
-  if (!validLocally) {
-    console.log('\n  Submitting anyway, to show the contract reject it in-circuit...');
-  } else {
-    console.log(`\n  Health factor (local, display only): ${localHealthFactor(submitted)}`);
-    console.log(`  Threshold: ${(Number(minHealthFactorBps) / 10000).toFixed(4)}`);
-  }
-
-  console.log('\n  Proving and submitting (30-60s)...');
-  pendingAttestation = { position: submitted, signature };
-  try {
-    const tx = await deployed.callTx.checkSolvency(minHealthFactorBps);
-    const verdict = tx.private?.result;
-    console.log(`\n  ✅ Accepted. Verdict: ${verdict !== undefined ? verdictLine(verdict) : '(see ledger)'}`);
-    console.log(`  Tx: ${tx.public.txId}`);
-    console.log(`  Block: ${tx.public.blockHeight}\n`);
-  } catch (error) {
-    const msg = error instanceof Error ? error.message : String(error);
-    // The contract's own assert message, surfaced from the failed proof.
-    if (msg.includes('not signed by the registered attester')) {
-      console.log('\n  🛑 REJECTED IN-CIRCUIT: position is not signed by the registered attester.');
-      console.log('     No verdict was written. This is the anti-theater check working.\n');
-    } else {
-      console.error(`\n  ❌ Failed: ${msg}\n`);
-    }
-  } finally {
-    pendingAttestation = null;
+    case 'failed':
+      spinner.fail(chalk.red(`Failed: ${result.message}\n`));
+      break;
   }
 }
 
@@ -323,145 +261,175 @@ async function main() {
   // there — creating it would hold stdin open and the process would never exit.
   const interactive = !args.check && !args.read;
 
-  console.log('\n╔══════════════════════════════════════════════════════════════╗');
-  console.log('║  freeboard — private solvency proofs                         ║');
-  console.log('╚══════════════════════════════════════════════════════════════╝\n');
+  // The banner stays hand-drawn rather than boxen'd: boxen is reserved for the
+  // verdict, so a border on the page means "this is the answer". The newlines sit
+  // OUTSIDE the chalk call — inside, chalk wraps the newline itself and emits a
+  // stray coloured blank line.
+  console.log();
+  console.log(chalk.cyan('╔══════════════════════════════════════════════════════════════╗'));
+  console.log(
+    chalk.cyan('║  ') + chalk.bold('freeboard') + chalk.dim(' — private solvency proofs') +
+      chalk.cyan('                         ║'),
+  );
+  console.log(chalk.cyan('╚══════════════════════════════════════════════════════════════╝'));
+  console.log();
 
   const rl = interactive ? createInterface({ input: stdin, output: stdout }) : null;
 
-  const deployment = getDeployment(network);
-  if (!deployment) {
-    console.error(`No deploy on file for network ${network}. Run \`npm run setup -- --network ${network}\` first.`);
-    process.exit(1);
-  }
-  console.log(`  Contract: ${deployment.address}`);
-  console.log(`  Network:  ${network}\n`);
+  // The sync ticker is hand-rolled rather than ora. Wallet sync races the SDK's
+  // own RPC logging on stdout, and ora redraws its line every frame — the two
+  // interleave into a smeared mess, where a plain \r ticker degrades gracefully.
+  // The proving spinner has no such competition, which is why ora fits there.
+  let syncInterval: NodeJS.Timeout | null = null;
+  // Captured from the sync hook rather than re-read afterwards: the balance is
+  // already in hand there, and asking the wallet again is a needless round trip.
+  let syncedBalance = 0n;
 
   try {
-    const attester = loadOrCreateAttesterKey();
-    console.log(`  Attester: ${formatVerifyingKey(attester.verifyingKey).slice(0, 46)}…`);
+    const client = await connectFreeboard({
+      hooks: {
+        onDeploymentResolved(network, deployment) {
+          console.log(`  ${chalk.bold('Contract:')} ${info(deployment.address)}`);
+          console.log(`  ${chalk.bold('Network: ')} ${network}\n`);
+        },
 
-    // The contract has no key-rotation circuit, so attestations only verify
-    // against the key it was deployed with. Comparing here turns an otherwise
-    // baffling in-circuit rejection into a clear, actionable message.
-    const recorded = deployment.attesterVerifyingKey;
-    if (recorded) {
-      const matches =
-        recorded.x === `0x${attester.verifyingKey.x.toString(16)}` &&
-        recorded.y === `0x${attester.verifyingKey.y.toString(16)}`;
-      if (!matches) {
-        console.log('\n  ⚠ The local attester key does NOT match the deployed contract.');
-        console.log('    Every check will be rejected in-circuit. The contract has no rotation');
-        console.log('    circuit, so either restore the original .midnight-attester.json or');
-        console.log(`    redeploy: npm run deploy -- --network ${network}\n`);
-      }
-    }
-    if (attester.created) {
-      console.log('  ⚠ A NEW attester key was just generated — see the warning above.');
-    }
-    console.log();
+        onAttesterLoaded(attester) {
+          console.log(`  ${chalk.bold('Attester:')} ${info(`${formatVerifyingKey(attester.verifyingKey).slice(0, 46)}…`)}`);
 
-    console.log('  Connecting to wallet...');
-    const walletCtx = await createWallet({ network, networkConfig, seed: SEED });
-    const restoredCount = Object.values(walletCtx.restored).filter(Boolean).length;
-    if (restoredCount > 0) {
-      console.log(`  Restored ${restoredCount}/3 child wallets from .midnight-wallet-state — sync will resume from saved point.`);
-    }
+          // The contract has no key-rotation circuit, so attestations only verify
+          // against the key it was deployed with. Naming a mismatch here turns an
+          // otherwise baffling in-circuit rejection into an actionable message.
+          if (attester.matchesDeployment === false) {
+            console.log(chalk.yellow.bold('\n  ⚠ The local attester key does NOT match the deployed contract.'));
+            console.log(chalk.yellow('    Every check will be rejected in-circuit. The contract has no rotation'));
+            console.log(chalk.yellow('    circuit, so either restore the original .midnight-attester.json or'));
+            console.log(chalk.yellow(`    redeploy: npm run deploy -- --network ${network}\n`));
+          }
+          if (attester.created) {
+            console.log(chalk.yellow('  ⚠ A NEW attester key was just generated — see the warning above.'));
+          }
+          console.log();
+        },
 
-    console.log('  Syncing with network...');
-    console.log('     RPC disconnection messages during sync are normal.\n');
-    const syncStart = Date.now();
-    const syncInterval = setInterval(() => {
-      const elapsed = Math.round((Date.now() - syncStart) / 1000);
-      process.stdout.write(`\r  ⏳ Still syncing... (${elapsed}s elapsed)   `);
-    }, 5000);
-    const state = await walletCtx.wallet.waitForSyncedState();
-    clearInterval(syncInterval);
-    process.stdout.write('\r  ✓ Synced with network.                                      \n');
+        onWalletConnecting() {
+          console.log(info('  Connecting to wallet...'));
+        },
 
-    await persistWalletState(network, walletCtx);
-    const balance = state.unshielded.balances[unshieldedToken().raw] ?? 0n;
-    console.log(`  Balance: ${balance.toLocaleString()} tNight\n`);
+        onWalletCreated(ctx) {
+          const restoredCount = Object.values(ctx.restored).filter(Boolean).length;
+          if (restoredCount > 0) {
+            console.log(info(`  Restored ${restoredCount}/3 child wallets from .midnight-wallet-state — sync will resume from saved point.`));
+          }
+        },
 
-    if (balance === 0n && !isLocalDevnet(network) && networkConfig.faucet) {
-      const address = walletCtx.unshieldedKeystore.getBech32Address();
-      console.log('  ⚠ Wallet has no tNight. Fund it from the faucet to send transactions:');
-      console.log(`     ${networkConfig.faucet}`);
-      console.log(`     Wallet address: ${address}\n`);
-    }
+        onSyncStart() {
+          console.log(info('  Syncing with network...'));
+          console.log(info('     RPC disconnection messages during sync are normal.\n'));
+          const syncStart = Date.now();
+          syncInterval = setInterval(() => {
+            const elapsed = Math.round((Date.now() - syncStart) / 1000);
+            process.stdout.write(chalk.dim(`\r  ⏳ Still syncing... (${elapsed}s elapsed)   `));
+          }, 5000);
+        },
 
-    console.log('  Connecting to contract...');
-    const providers = await createProviders(walletCtx);
+        onSynced(balance) {
+          if (syncInterval) clearInterval(syncInterval);
+          syncInterval = null;
+          syncedBalance = balance;
+          process.stdout.write(`\r  ${chalk.green('✓')} Synced with network.                                      \n`);
+          console.log(`  ${chalk.bold('Balance:')} ${balance.toLocaleString()} tNight\n`);
+        },
 
-    const deployed: any = await findDeployedContract(providers, {
-      compiledContract: compiledContract as any,
-      contractAddress: deployment.address,
-      privateStateId: PRIVATE_STATE_ID,
-      initialPrivateState: {},
+        onContractConnecting() {
+          console.log(info('  Connecting to contract...'));
+        },
+
+        onConnected() {
+          console.log(`  ${chalk.green('✅ Connected!')}\n`);
+        },
+      },
     });
 
-    console.log('  ✅ Connected!\n');
+    // The faucet notice belongs after the connect banner, but the balance it
+    // depends on was already read during sync — no second query.
+    if (syncedBalance === 0n && !isLocalDevnet(client.network) && client.networkConfig.faucet) {
+      const address = client.walletCtx.unshieldedKeystore.getBech32Address();
+      console.log(chalk.yellow('  ⚠ Wallet has no tNight. Fund it from the faucet to send transactions:'));
+      console.log(chalk.yellow(`     ${client.networkConfig.faucet}`));
+      console.log(info(`     Wallet address: ${address}\n`));
+    }
 
     if (!interactive) {
       // One-shot mode. --read before --check would show the pre-call state, which
       // is the less useful order, so a combined invocation reads AFTER checking.
       if (args.check) {
-        await runCheck(null, deployed, attester, {
+        await runCheck(null, client, {
           tamper: args.tamper,
           preset: { collateral: args.collateral, debt: args.debt, threshold: args.threshold, minHf: args.minHf },
         });
       }
-      if (args.read) await readLedger(providers, deployment.address);
+      if (args.read) printLedger(await client.readLedger());
     } else {
       let running = true;
       while (running) {
-        console.log('─── Menu ───────────────────────────────────────────────────────');
-        console.log('  1. Run a solvency check (attested)');
-        console.log('  2. Read the public verdict from the chain');
-        console.log('  3. Run a TAMPERED check (demonstrate in-circuit rejection)');
-        console.log('  4. Check wallet balance');
-        console.log('  5. Exit\n');
+        console.log(chalk.dim('─── Menu ───────────────────────────────────────────────────────'));
+        console.log(`  ${chalk.bold('1.')} Run a solvency check ${info('(attested)')}`);
+        console.log(`  ${chalk.bold('2.')} Read the public verdict from the chain`);
+        console.log(`  ${chalk.bold('3.')} Run a ${chalk.yellow('TAMPERED')} check ${info('(demonstrate in-circuit rejection)')}`);
+        console.log(`  ${chalk.bold('4.')} Check wallet balance`);
+        console.log(`  ${chalk.bold('5.')} Exit\n`);
 
-        const choice = (await rl!.question('  Your choice: ')).trim();
+        const choice = (await rl!.question(chalk.bold('  Your choice: '))).trim();
 
         switch (choice) {
           case '1':
-            await runCheck(rl, deployed, attester);
+            await runCheck(rl, client);
             break;
 
           case '2':
-            await readLedger(providers, deployment.address);
+            printLedger(await client.readLedger());
             break;
 
           case '3':
-            await runCheck(rl, deployed, attester, { tamper: true });
+            await runCheck(rl, client, { tamper: true });
             break;
 
           case '4': {
-            const currentState = await walletCtx.wallet.waitForSyncedState();
-            const currentBalance = currentState.unshielded.balances[unshieldedToken().raw] ?? 0n;
-            console.log(`\n  tNight: ${currentBalance.toLocaleString()}`);
-            console.log(`  DUST:   ${currentState.dust.balance(new Date()).toLocaleString()}\n`);
+            const { tNight, dust } = await client.balances();
+            console.log(`\n  ${chalk.bold('tNight:')} ${tNight.toLocaleString()}`);
+            console.log(`  ${chalk.bold('DUST:  ')} ${dust.toLocaleString()}\n`);
             break;
           }
 
           case '5':
             running = false;
-            console.log('\n  Done.\n');
+            console.log(info('\n  Done.\n'));
             break;
 
           default:
-            console.log('\n  Invalid choice. Enter 1-5.\n');
+            console.log(chalk.yellow('\n  Invalid choice. Enter 1-5.\n'));
         }
       }
     }
 
-    await persistWalletState(network, walletCtx);
-    await walletCtx.wallet.stop();
+    await client.close();
   } catch (error) {
-    console.error('\n❌ Error:', error instanceof Error ? error.message : error);
+    // Two failures are worth their own wording, because both are fixed by running
+    // one specific command rather than by debugging anything.
+    if (error instanceof ContractNotCompiledError) {
+      console.error(chalk.red.bold('\n❌ Contract not compiled!'), chalk.red('Run: npm run compile\n'));
+      process.exitCode = 1;
+      return;
+    }
+    if (error instanceof NoDeploymentError) {
+      console.error(chalk.red(`\n${error.message}\n`));
+      process.exitCode = 1;
+      return;
+    }
+    console.error(chalk.red.bold('\n❌ Error:'), chalk.red(error instanceof Error ? error.message : String(error)));
     process.exitCode = 1;
   } finally {
+    if (syncInterval) clearInterval(syncInterval);
     rl?.close();
   }
 }

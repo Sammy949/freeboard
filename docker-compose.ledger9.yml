@@ -17,9 +17,36 @@
 # versions.
 #
 # LOCAL DEVELOPMENT ONLY — do not expose these ports to a public network.
-# Ports are offset by +10000 from the ledger-8 stack so both can coexist.
+# Ports are offset by +10000 from the ledger-8 stack so both can coexist. They
+# should NOT coexist on a typical dev machine — see the memory note below.
 # Up:   docker compose -f docker-compose.ledger9.yml up -d --wait
 # Down: docker compose -f docker-compose.ledger9.yml down -v
+#
+# MEMORY (added 2026-09-01, after this stack hung a WSL2 VM).
+# Every service carries a hard cap. Two reasons, and the second is the real one:
+#  1. The prover process on the HOST side is the biggest consumer (~5.8GB RSS
+#     for the wallet SDK + WASM prover). The containers have to leave room for it.
+#  2. Without a cap, a container leak triggers a GLOBAL out-of-memory inside the
+#     VM, and the kernel picks the largest process as the victim — which is the
+#     prover, mid-proof, not the container that actually misbehaved. A per-service
+#     cap keeps the blast radius inside the offending container.
+# `memswap_limit` equals `mem_limit` on purpose: that denies these containers
+# swap entirely. Docker's default would allow an extra mem_limit of swap, and
+# paging to a virtual disk is exactly the behaviour that hangs the whole VM.
+# These ceilings are deliberately loose so they never bind on a healthy run;
+# tighten them only against measured peaks from `docker stats`.
+#
+# MEASURED 2026-09-01, one full cycle (up → deploy → healthy check → tampered
+# check, ~450 blocks, sampled every 5s):
+#   node          224 MiB peak   (15% of its cap)
+#   indexer       191 MiB peak   ( 9%)
+#   proof-server  112 MiB peak   ( 3%)
+#   whole VM      4.9 GiB peak, well inside its cap, swap never touched
+# The proof server never spiked: this circuit is small enough that proving is
+# not the memory event it was assumed to be. The caps are kept as-is anyway,
+# because that sample covers well under an hour of chain and the indexer's
+# postgres grows with chain length. Revisit after a long-lived session, not
+# from this number.
 name: freeboard-devnet-l9
 
 services:
@@ -39,6 +66,8 @@ services:
     # submission succeeds, so the failure looks unrelated to versions; it is not.
     image: midnightntwrk/midnight-node:${MIDNIGHT_NODE_IMAGE_TAG:-2.0.0-rc.4}
     container_name: freeboard-l9-node
+    mem_limit: 1500m
+    memswap_limit: 1500m
     ports:
       - "19944:9944"
     environment:
@@ -66,7 +95,13 @@ services:
     # any APP__* key this container is where it will surface.
     image: midnightntwrk/indexer-standalone:4.4.0-rc.2
     container_name: freeboard-l9-indexer
-    restart: on-failure
+    # No restart policy — see the matching comment in docker-compose.yml. Short
+    # version: `depends_on: service_healthy` plus `up --wait` already order this
+    # correctly, and a restart policy silently resurrects stale containers when
+    # the Docker daemon starts.
+    # Bundles its own postgres, so this is the second-largest container.
+    mem_limit: 2g
+    memswap_limit: 2g
     ports:
       - "18088:8088"
     environment:
@@ -98,6 +133,11 @@ services:
     image: midnightntwrk/proof-server:9.0.0-rc.6
     container_name: freeboard-l9-proof-server
     command: ["midnight-proof-server -v"]
+    # Loosest cap of the three: proving is the one operation here that legitimately
+    # spikes, and a cap that bites mid-proof would break a working demo to fix a
+    # memory problem. 4g bounds a runaway without binding on a real proof.
+    mem_limit: 4g
+    memswap_limit: 4g
     ports:
       - "16300:6300"
     environment:

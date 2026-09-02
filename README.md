@@ -331,11 +331,15 @@ generated state.
 | `npm run compile`       | Compile the Compact contract.                                  |
 | `npm run deploy`        | Deploy the compiled contract (requires devnet up + compiled).  |
 | `npm run cli`           | Run solvency checks / read verdicts. Interactive, or `--check` / `--read` / `--tamper` for one-shot. |
+| `npm run serve`         | Local HTTP service over the same client, for the web demo. **Loopback only, no auth** — it holds the attester signing key. One synced wallet per process; checks are serialized. |
 | `npm run check-balance` | Print the genesis-seed wallet's NIGHT and DUST balances.       |
+| `npm run test:cache`    | Pure check on wallet-cache chain binding. No devnet needed.    |
 | `npm run test:e2e`      | Read-back check: contract is live, and its public state leaks no position. |
 | `npm run clean`         | Remove `contracts/managed/`, `.midnight-state.json`, `.midnight-attester.json`, and `.midnight-wallet-state/`. |
 | `npm run devnet:start` / `:stop` / `:clean` | Ledger-9 devnet lifecycle (`:clean` also drops volumes). |
-| `npm run proof-server:start` / `:stop` | Compose lifecycle for just the ledger-8 proof-server service. |
+| `npm run devnet:ps`     | Show every freeboard container, both stacks, running or not.   |
+| `npm run devnet:stop-all` | Bring down both stacks. Use this if you are unsure what is up. |
+| `npm run devnet8:start` / `:stop` | Ledger-8 fallback stack. **Never run alongside the ledger-9 stack** — two nodes, two indexers and two proof servers will exhaust a typical dev machine. Was named `proof-server:start`, which implied it started only a proof server; it starts all three services. |
 
 (See **Repo layout** near the top for the current structure.)
 
