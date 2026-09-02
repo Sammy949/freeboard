@@ -12,6 +12,7 @@
     "deploy": "npx tsx src/deploy.ts",
     "cli": "npx tsx src/cli.ts",
     "serve": "npx tsx src/server.ts",
+    "prime": "tsx scripts/prime-results.ts",
     "check-balance": "npx tsx src/check-balance.ts",
     "network": "npx tsx src/network.ts",
     "devnet:start": "docker compose -f docker-compose.ledger9.yml up -d --wait",
@@ -21,7 +22,7 @@
     "devnet:stop-all": "docker compose -f docker-compose.ledger9.yml down; docker compose -f docker-compose.yml down",
     "devnet8:start": "docker compose -f docker-compose.yml up -d --wait",
     "devnet8:stop": "docker compose -f docker-compose.yml down",
-    "clean": "rm -rf contracts/managed .midnight-state.json .midnight-attester.json .midnight-wallet-state midnight-level-db",
+    "clean": "rm -rf contracts/managed .midnight-state.json .midnight-attester.json .midnight-results.json .midnight-wallet-state midnight-level-db",
     "test": "npm run test:cache",
     "test:cache": "tsx scripts/cache-check.ts",
     "test:e2e": "tsx scripts/e2e-check.ts"

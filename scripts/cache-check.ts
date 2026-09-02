@@ -15,6 +15,14 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 
 import { toHttpRpcUrl } from '../src/chain-identity';
+import {
+  clearResults,
+  loadResults,
+  RESULTS_FILE,
+  saveResults,
+  type ResultsCache,
+} from '../src/results-cache';
+import { CACHEABLE_SCENARIOS, SCENARIOS } from '../src/scenarios';
 import { persistWalletState, type WalletContext } from '../src/wallet';
 import { clearWalletState, loadWalletState, saveWalletState } from '../src/wallet-state';
 
@@ -89,6 +97,72 @@ async function main(): Promise<void> {
   await persistWalletState(NET, { ...ctx, genesisHash: B } as WalletContext, cwd);
   const back = loadWalletState(NET, B, { cwd });
   check('identified chain persists and round-trips', back.discarded === null && back.state.dust === 'd9');
+
+  console.log('\nScenario set');
+  // The split is load-bearing, not cosmetic: the tampered case writes nothing to
+  // the ledger, so it can never be served from a cache. Asserted so a later edit
+  // cannot quietly make it cacheable.
+  check('exactly one scenario is live-only', SCENARIOS.filter((s) => s.liveOnly).length === 1);
+  check('the tampered scenario is the live-only one',
+    SCENARIOS.find((s) => s.liveOnly)?.id === 'tampered');
+  check('nothing cacheable is live-only', CACHEABLE_SCENARIOS.every((s) => !s.liveOnly));
+  check('every cacheable scenario has a bar to clear',
+    CACHEABLE_SCENARIOS.every((s) => s.input.minHealthFactorBps > 0n));
+
+  console.log('\nResults cache binding');
+  const RESULT_CONTRACT = 'c0ffee';
+  const record = {
+    id: 'safe' as const,
+    label: 'Healthy position',
+    summary: 'x',
+    minHealthFactorBps: '15000',
+    signed: { collateral: '1000000', debt: '400000', liquidationThresholdBps: '8500', asOf: '1788300000' },
+    healthFactor: '2.1250',
+    verdict: 'safe' as const,
+    txId: '0xdeadbeef',
+    blockHeight: '42',
+    provedAt: 1788300000,
+  };
+  const cache: ResultsCache = {
+    version: 1,
+    network: NET,
+    genesisHash: A,
+    contractAddress: RESULT_CONTRACT,
+    scenarios: [record],
+  };
+
+  const none = loadResults(A, RESULT_CONTRACT, { cwd });
+  check('no file: no-cache, nothing returned', none.status === 'no-cache' && none.cache === null);
+
+  saveResults(cache, { cwd });
+  const current = loadResults(A, RESULT_CONTRACT, { cwd });
+  check('same chain and contract: current',
+    current.status === 'current' && current.cache?.scenarios[0]?.txId === '0xdeadbeef', current.status);
+
+  const wrongChain = loadResults(B, RESULT_CONTRACT, { cwd });
+  // The records still come back so the UI can say "re-run prime" rather than
+  // showing an empty page; it is the STATUS that withholds trust.
+  check('different chain: chain-mismatch, records still readable',
+    wrongChain.status === 'chain-mismatch' && wrongChain.cache?.scenarios.length === 1, wrongChain.status);
+
+  const wrongContract = loadResults(A, 'deadbeef', { cwd });
+  check('redeployed contract: contract-mismatch',
+    wrongContract.status === 'contract-mismatch', wrongContract.status);
+
+  const noChainId = loadResults(null, RESULT_CONTRACT, { cwd });
+  check('unidentifiable chain: chain-unknown, never current',
+    noChainId.status === 'chain-unknown', noChainId.status);
+
+  fs.writeFileSync(path.join(cwd, RESULTS_FILE), '{ not json');
+  check('corrupt file: unreadable, nothing returned',
+    loadResults(A, RESULT_CONTRACT, { cwd }).status === 'unreadable');
+
+  saveResults({ ...cache, version: 99 as unknown as 1 }, { cwd });
+  check('wrong version: unreadable rather than half-trusted',
+    loadResults(A, RESULT_CONTRACT, { cwd }).status === 'unreadable');
+
+  clearResults({ cwd });
+  check('clearResults removes the file', !fs.existsSync(path.join(cwd, RESULTS_FILE)));
 
   fs.rmSync(cwd, { recursive: true, force: true });
 

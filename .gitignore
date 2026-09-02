@@ -65,3 +65,7 @@ midnight-level-db/
 
 # Midnight wallet sync state (per-network serialized wallet state cache)
 .midnight-wallet-state/
+
+# Proved-once scenario results. Bound to one chain and one deployment, so it is
+# generated locally by `npm run prime` and never shared (see src/results-cache.ts).
+.midnight-results.json
