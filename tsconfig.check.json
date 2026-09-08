@@ -1,0 +1,10 @@
+{
+  "extends": "./tsconfig.json",
+  // Dev-only sources: the cache assertions, the e2e check and the priming script.
+  // Typechecked, never compiled into dist/ and never published.
+  "include": ["src/**/*", "scripts/**/*"],
+  "compilerOptions": {
+    "noEmit": true,
+    "rootDir": "."
+  }
+}

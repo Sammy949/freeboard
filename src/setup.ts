@@ -2,7 +2,7 @@
 // `docker compose up -d --wait && npm run compile && npm run deploy` so
 // we can branch on --network and forward it to deploy.
 import { spawnSync } from 'node:child_process';
-import { resolveNetwork, setActiveNetwork, parseNetworkFlag } from './network';
+import { resolveNetwork, setActiveNetwork, parseNetworkFlag } from './network.js';
 
 function run(cmd: string, args: string[]): void {
   const r = spawnSync(cmd, args, { stdio: 'inherit', shell: false });

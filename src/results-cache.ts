@@ -30,8 +30,9 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 
-import type { NetworkId } from './network';
-import type { ScenarioId } from './scenarios';
+import type { NetworkId } from './network.js';
+import { stateHome } from './paths.js';
+import type { ScenarioId } from './scenarios.js';
 
 export const RESULTS_FILE = '.midnight-results.json';
 export const RESULTS_VERSION = 1 as const;
@@ -99,11 +100,14 @@ export interface ResultsLoad {
 }
 
 export interface FsOptions {
+  /** Overrides the state directory outright. Absent means the resolved state home. */
   cwd?: string;
+  /** The environment `stateHome` reads its overrides from. See network.ts FsOptions. */
+  env?: NodeJS.ProcessEnv;
 }
 
 function resultsPath(opts: FsOptions = {}): string {
-  return path.join(opts.cwd ?? process.cwd(), RESULTS_FILE);
+  return path.join(opts.cwd ?? stateHome(opts.env), RESULTS_FILE);
 }
 
 // Deliberately duplicated from wallet-state.ts rather than shared: both modules

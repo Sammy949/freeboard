@@ -63,9 +63,34 @@ Working end to end on a local ledger-9 devnet, as of 2026-08-29.
   that is why the check is in-circuit already. See `src/attester.ts`.
 - 🚧 **Not deployed to a public testnet, and no web UI yet.**
 
+## Install
+
+```bash
+npx freeboard-cli --help          # no install
+npm i -g freeboard-cli            # then: freeboard --help
+```
+
+The package is `freeboard-cli`; the command it installs is `freeboard`. (The
+plain `freeboard` name has belonged to an unrelated IOT dashboard since 2016.)
+
+**What you get, and what you do not.** The package ships the CLI, the contract
+source and its compiled prover keys, so `--help` and the whole interface work
+immediately. It does **not** ship a chain. Freeboard proves against a *deployed*
+contract, and deploying one needs the Compact compiler and a running devnet,
+neither of which fits in an npm package. So on a bare install:
+
+```bash
+freeboard --help                  # works
+freeboard --read                  # "No deploy on file", and it says why
+```
+
+To get an actual verdict, clone the repo and follow **Try it** below. The CLI
+tells you this rather than failing obscurely.
+
 ### Try it
 
 ```bash
+git clone https://github.com/Sammy949/freeboard && cd freeboard
 npm install
 npm run devnet:start                 # ledger-9 devnet, waits for healthy
 npm run compile                      # -> contracts/managed/freeboard/
@@ -73,15 +98,21 @@ npm run deploy -- --network undeployed-l9
 npm run cli                          # interactive menu
 ```
 
-Or non-interactively:
+Or non-interactively — `--` passes the flags through npm to the CLI:
 
 ```bash
-npx tsx src/cli.ts --read            # the verifier's view: verdict only
-npx tsx src/cli.ts --check --read    # prove a position, then read the verdict
-npx tsx src/cli.ts --check --collateral 1000000 --debt 900000 --threshold 8500 --min-hf 15000 --read
-npx tsx src/cli.ts --check --tamper  # watch the in-circuit check reject it
-npm run test:e2e                     # asserts the public state leaks no position
+npm run cli -- --read            # the verifier's view: verdict only
+npm run cli -- --check --read    # prove a position, then read the verdict
+npm run cli -- --check --collateral 1000000 --debt 900000 --threshold 8500 --min-hf 15000 --read
+npm run cli -- --check --tamper  # watch the in-circuit check reject it
+npm run cli -- --help            # every flag, with the circuit's field bounds
+npm run test:e2e                 # asserts the public state leaks no position
 ```
+
+Bare `npx tsx src/cli.ts` no longer works on its own: the CLI needs a loader hook
+registered before the Midnight SDK is imported (it redirects `cross-fetch`, see
+`bin/cross-fetch-shim.cjs` for why). The npm scripts pass it; so does the published
+`freeboard` binary.
 
 A real run against the devnet:
 
@@ -165,7 +196,7 @@ npm run test:e2e
 
 1. `docker compose -f <network's compose file> up -d --wait` — starts a local Midnight devnet (node, indexer, proof-server) and blocks until all three pass their healthchecks.
 2. `npm run compile` — compiles `contracts/freeboard.compact` to `contracts/managed/freeboard/`.
-3. `npm run deploy` — derives the genesis-seed wallet (NIGHT pre-minted), registers UTXOs for DUST generation, loads or generates the attester key, deploys the contract with that key as its constructor argument, writes `.midnight-state.json`.
+3. `npm run deploy` — derives the genesis-seed wallet (NIGHT pre-minted), registers UTXOs for DUST generation, loads or generates the attester key, deploys the contract with that key as its constructor argument, writes the deploy record to `.midnight-state.json` in the state home (see **Where state lives**).
 
 `npm run test:e2e` reconnects to the deployed contract, reads its ledger state, and asserts the public state carries a verdict and no position data. Exits 0 on success.
 
@@ -235,17 +266,55 @@ npm run network                 # prints current active network
 npm run network undeployed-l9   # switch back to the ledger-9 devnet
 ```
 
+### Where state lives
+
+Everything Freeboard remembers sits in **one per-user directory**, not in the
+project:
+
+```
+$FREEBOARD_HOME                 if set — the escape hatch, and how to run two
+                                identities on one machine on purpose
+$XDG_CONFIG_HOME/freeboard      if XDG_CONFIG_HOME is set to an absolute path
+~/.config/freeboard             otherwise
+```
+
+Inside it (directory `0700`, secrets `0600`):
+
+| | |
+| --- | --- |
+| `.midnight-state.json` | wallet seed + recovery phrase, and every deploy record |
+| `.midnight-attester.json` | the attester **signing key** |
+| `recovery-phrase.<network>.txt` | a freshly generated phrase, written once |
+| `.midnight-wallet-state/` | wallet sync cache, per network |
+| `private-state-db/` | the LevelDB private-state store |
+| `.midnight-results.json` | proved-once scenario records |
+
+These used to default to `process.cwd()`, which meant `freeboard` in `~/work`
+and `freeboard` in `~/tmp` were **different wallets** — each silently created,
+each printing its own recovery phrase. Fund one, run from the other, and the
+balance reads zero with no explanation. Per-user state fixes that and keeps the
+signing key out of whatever directory you happened to be in.
+
+`npm run clean` removes build artifacts only. Deleting state is
+`FREEBOARD_CLEAN_CONFIRM=1 npm run clean:state`, and the confirmation is
+required because the phrase and the attester key are unrecoverable — losing the
+latter means every existing deployment is dead, since the contract bakes the
+verifying key into its constructor and has no rotation circuit.
+
 ### How wallets work across networks
 
 - Both devnets use a hardcoded genesis seed, pre-funded by the `dev` preset.
 - `preview` and `preprod` generate a fresh wallet on first use: a 24-word
-  BIP-39 recovery phrase (printed once) plus its derived seed, both stored
-  in `.midnight-state.json` (gitignored). The wallet survives switching
-  networks — switch back later and your funded wallet returns.
-- **Back up your recovery phrase** if you fund a public-network wallet you
-  care about. It is printed when the wallet is created and kept in
-  `.midnight-state.json` under `wallets.<network>.mnemonic`. Anyone holding
-  the phrase controls the wallet.
+  BIP-39 recovery phrase plus its derived seed, stored in the state home
+  described above. The wallet survives switching networks — switch back later
+  and your funded wallet returns.
+- **The phrase is never printed to stdout.** It is written to
+  `recovery-phrase.<network>.txt` (mode `0600`) and the CLI prints the *path*.
+  A mnemonic on stdout is a wallet-controlling secret in every log, pipe and
+  screenshare that captures it. The file is created with an exclusive flag, so
+  a second run can never overwrite one.
+- **Back up your recovery phrase** if you fund a public-network wallet you care
+  about, then delete the file. Anyone holding the phrase controls the wallet.
 - Wallets created before mnemonic support keep working from their stored
   `seed`; they just have no phrase to import into Lace.
 
@@ -263,8 +332,9 @@ convention Lace uses — so identity is portable in both directions:
   read -s MIDNIGHT_WALLET_MNEMONIC && export MIDNIGHT_WALLET_MNEMONIC
   npm run deploy
   ```
-- **Take a scaffold wallet to Lace**: restore Lace from the 24-word phrase
-  in `.midnight-state.json`.
+- **Take a scaffold wallet to Lace**: restore Lace from the 24-word phrase in
+  `recovery-phrase.<network>.txt`, or from `wallets.<network>.mnemonic` in
+  `.midnight-state.json`.
 
 ### Funding a public-network wallet
 
@@ -295,6 +365,9 @@ suffix — they apply to whichever network is active for the run):
 | `MIDNIGHT_FAUCET_URL` | Override the faucet URL printed during setup. |
 | `MIDNIGHT_PROOF_SERVER_URL` | Override the proof server URL — set to a public proof server (e.g. `https://lace-proof-pub.preview.midnight.network`) to skip running one locally. |
 | `MIDNIGHT_FAUCET_TIMEOUT_MS` | Faucet poll budget in milliseconds (default 600000 = 10 min). |
+| `FREEBOARD_HOME` | Override the state directory outright (see **Where state lives**). The way to keep two isolated identities on one machine, and what the tests use. |
+| `XDG_CONFIG_HOME` | If absolute and `FREEBOARD_HOME` is unset, state goes in `$XDG_CONFIG_HOME/freeboard`. |
+| `PRIVATE_STATE_PASSWORD` | Password for the encrypted private-state store. Defaults to a **public placeholder** that is fine for a local devnet and not for anything else. |
 
 By default all networks use the **local** proof server. Public proof
 servers exist (see the env override above) but the local default keeps
@@ -308,20 +381,22 @@ npm run network undeployed-l9  # or: npm run setup -- --network undeployed-l9
 ```
 
 Your preview/preprod wallet seeds and deploy addresses stay in
-`.midnight-state.json`. Switch back later, and they're still there.
+`.midnight-state.json` in the state home. Switch back later, and they're still
+there.
 
 ### Wallet sync cache
 
 After each `deploy`, `cli`, or `check-balance` run, the scripts serialize the
-wallet's synced state to `.midnight-wallet-state/<network>/` (gitignored).
+wallet's synced state to `.midnight-wallet-state/<network>/` inside the state
+home (see **Where state lives**).
 The next run on the same network restores from that snapshot and only catches
 up to the latest block instead of replaying from genesis — meaningful on
 `preview` / `preprod` where a from-seed sync takes minutes.
 
 If the cache is stale or corrupt (e.g. after an SDK upgrade with an
 incompatible state format) the wallet falls back to a fresh from-seed sync
-with a one-line warning. `npm run clean` removes the cache along with other
-generated state.
+with a one-line warning. `npm run clean:state` removes it along with the rest
+of the per-user state.
 
 ## Available scripts
 
@@ -335,7 +410,10 @@ generated state.
 | `npm run check-balance` | Print the genesis-seed wallet's NIGHT and DUST balances.       |
 | `npm run test:cache`    | Pure check on wallet-cache chain binding. No devnet needed.    |
 | `npm run test:e2e`      | Read-back check: contract is live, and its public state leaks no position. |
-| `npm run clean`         | Remove `contracts/managed/`, `.midnight-state.json`, `.midnight-attester.json`, and `.midnight-wallet-state/`. |
+| `npm run typecheck`     | Typecheck `src/` **and** `scripts/` (the latter is not compiled into `dist/`). |
+| `npm run build`         | Compile `src/` to `dist/`. Runs automatically on `npm pack`/`publish`. |
+| `npm run clean`         | Remove `contracts/managed/` and `dist/`. Build artifacts only. |
+| `npm run clean:state`   | Delete the wallet, recovery phrase, attester key and caches from the state home. Lists what it would remove and refuses without `FREEBOARD_CLEAN_CONFIRM=1`. |
 | `npm run devnet:start` / `:stop` / `:clean` | Ledger-9 devnet lifecycle (`:clean` also drops volumes). |
 | `npm run devnet:ps`     | Show every freeboard container, both stacks, running or not.   |
 | `npm run devnet:stop-all` | Bring down both stacks. Use this if you are unsure what is up. |

@@ -19,6 +19,8 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 
+import { ensureStateHome, stateHome } from './paths.js';
+
 import {
   CompactTypeField,
   CompactTypeVector,
@@ -94,11 +96,14 @@ export interface AttesterKeypair {
 }
 
 export interface AttesterOptions {
+  /** Overrides the state directory outright. Absent means the resolved state home. */
   cwd?: string;
+  /** The environment `stateHome` reads its overrides from. See network.ts FsOptions. */
+  env?: NodeJS.ProcessEnv;
 }
 
 function statePath(opts: AttesterOptions = {}): string {
-  return path.join(opts.cwd ?? process.cwd(), ATTESTER_STATE_FILE);
+  return path.join(opts.cwd ?? stateHome(opts.env), ATTESTER_STATE_FILE);
 }
 
 /**
@@ -147,6 +152,10 @@ export function loadOrCreateAttesterKey(opts: AttesterOptions = {}): AttesterKey
   };
 
   fs.mkdirSync(path.dirname(file), { recursive: true });
+  // The state directory is created 0700 when it is the resolved home, so a signing
+  // key never lands in a world-readable directory even for the instant before the
+  // 0600 file appears.
+  if (opts.cwd === undefined) ensureStateHome(opts.env);
   // 0600: it is a secret, even a throwaway one. Written via a temp file so a
   // crash mid-write cannot leave a half-key that reads as valid JSON.
   const tmp = `${file}.tmp-${process.pid}-${Date.now()}`;

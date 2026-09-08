@@ -1,0 +1,22 @@
+# An explicit npmignore, even though package.json has a `files` allowlist.
+#
+# `files` is what actually decides the tarball. This file exists so that npm never
+# falls back to .gitignore — which it did, silently, and which shipped
+# .claude/settings.local.json (326 permission entries naming absolute home paths and
+# localhost ports) while EXCLUDING contracts/managed/ that the runtime needs. Belt and
+# braces on a mistake that is invisible until someone downloads the package.
+#
+# Anything not listed in `files` is excluded regardless. These are the entries worth
+# naming so the intent is readable.
+
+.claude/
+notes/
+web/
+scripts/
+src/
+patches/
+docker-compose*.yml
+tsconfig*.json
+.midnight-*
+midnight-level-db/
+*.tsbuildinfo

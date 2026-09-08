@@ -522,21 +522,136 @@ reading like it started one service. Added `devnet:ps` and `devnet:stop-all`.
     triggers on) leaves it `Exited` instead of resurrecting it.
 
 
-## Landing page (later — respect the anti-slop law in ~/.claude/CLAUDE.md)
+## Landing page — SHIPPED 2026-09-05, and the interactive demo is DEFERRED ON PURPOSE
+
+`web/` is now a **static single page**. `npm run build` in `web/` emits `○ /` as
+prerendered static content: no fetch, no `force-dynamic`, no service dependency. It can
+be deployed to a public URL today, which the previous version could never be.
+
+**Why static, and why the interactive version is deferred rather than cancelled.** Three
+reasons, in the order they actually decided it:
+
+1. **The service cannot be deployed.** `src/server.ts` binds loopback and holds the
+   attester signing key plus a funded wallet; its own header says binding to loopback IS
+   the access control. A page that fetches it shows "service offline" everywhere except
+   this machine. The workaround would have been a cached-results deploy, i.e. a static
+   page with extra steps.
+2. **It could not be looked at without faking it.** Reviewing the interactive version
+   required `devnet:start` → `compile` → `deploy` → `prime` → `serve` → `next dev`, six
+   commands and a devnet with a tight WSL memory budget. To take screenshots at all, a
+   fake backend had to be written at `/tmp/fb-mock/mock.mjs`. A demo that cannot be
+   demoed without a mock is not doing its job.
+3. **It leaked the numbers it claimed to withhold.** `page.tsx` passed the whole
+   `ScenariosResponse` into a client component, so `collateral: "1000000"`,
+   `debt: "400000"`, `liquidationThresholdBps: "8500"` and the rendered health factors
+   `2.1250` / `0.9444` were all serialized into the RSC flight payload — underneath a
+   dot-grid redaction and the sentence "the circuit read these; the ledger never did".
+   Grepping the served HTML found all six. View-source refuted the page's central claim
+   in about four seconds.
+
+**THE BACKEND IS INTACT AND DORMANT. Do not delete or simplify it.** `GET /health`,
+`GET /scenarios`, `GET /verdict`, `POST /check`, `src/scenarios.ts`,
+`src/results-cache.ts` and `scripts/prime-results.ts` are all unchanged, still covered by
+`npm run test:cache`, and still the correct design for an interactive version. The
+genesis+contract binding on the results cache is the part that took the most thought and
+is the part most easily thrown away by accident. It is not wasted work; it is the thing a
+live demo would wire into.
+
+What the page carries now:
+- Header: the FREEBOARD wordmark in Khand, with the load-line mark as a small glyph
+  beside it, plus the tagline.
+- The mark, at panel scale, showing ONE fixed reading: the healthy preset proved on
+  2026-09-02 at block 3744. Real transaction, real `asOf`. `minHealthFactorBps` is
+  disclosed in full because it is the one public input; collateral, debt, threshold and
+  health factor are dot-grid redactions below the waterline.
+- Two paragraphs of explanation, then the install command with a copy button. That
+  button is the page's only interactive control and it is verified working with a real
+  pointer click: clipboard write confirmed, toast shown, glyph swapped and reverted.
+- Three caveats stated in plain sight rather than behind a disclosure widget: the mock
+  oracle, local-devnet-only, and the single verdict slot.
+- Footer: contract address, genesis hash, network, deploy date, GitHub link.
+
+**Withheld values are baked as DIGIT COUNTS**, in `web/lib/deployment.ts`. Enough to size
+a redaction honestly, useless as a disclosure. Verified: `1000000`, `400000`, `900000`,
+`8500`, `2.1250` and `0.9444` are all absent from the served HTML.
+
+Four rendering bugs were found by measuring the real page in a browser, not by reading
+the code. Worth recording because three of them were invisible at desktop width:
+- The **load line's deck line was drawn straight through the transaction id** at 390px
+  (99px of overlap) and the redaction bars met it at 0px clearance at 1024px. The mark is
+  absolutely positioned, so nothing reserved its column. Fixed with a `MARK_GUTTER` right
+  padding on both content blocks, tied by comment to the mark's own width.
+- The redaction rows held a fixed `w-44` label column that could not compress, pushing
+  the bars under the mark on a phone. Now wraps below `sm`.
+- **The install command sat at 1227px on an 844px screen** — the page's entire reason for
+  existing, a screen and a half below the fold. The fold is now reordered on narrow
+  screens: headline, command, then the mark. DOM order unchanged.
+- The waterline/mark inequality is asserted at module scope. An earlier pass had the
+  AT_RISK water 12px BELOW the mark, so the instrument reported freeboard on an
+  overloaded position — the one relationship the whole page rests on, inverted.
+
+Contrast measured from the real oklch tokens: every text pair passes WCAG AA, lowest is
+6.01:1 (the AT_RISK word). Focus ring renders and is visible. No console errors at 390,
+1280 or 1440.
+
+### Stretch goal only: the interactive demo
+
+Wire the dormant endpoints into the page ONLY if the README, the deck, the demo video and
+npm packaging are all finished with real time to spare before **2026-09-16**. Do not build
+toward it speculatively. What it would add:
+- the three-scenario selector (healthy / undercollateralised / forged)
+- live `POST /check` for the forged case, which costs 0.4s rather than 45s because the
+  in-circuit assert fires before a proof is built
+- the current-chain-state panel over `GET /verdict`, kept visibly separate from the
+  per-scenario readings because the ledger holds ONE verdict slot
+- state-transition motion on the waterline
+
+If a future session or a judge wonders why working `/scenarios` and `/check` endpoints are
+not visible on the page: this is why. The decision is scope, not oversight.
+
+## Landing page design constraints (kept for reference)
 Water/nautical signature: waterline, load line / Plimsoll mark, freeboard margin, draft.
 The metaphor must do real work (verdict = above/below the line), not be decoration. One
 signature artifact, atmosphere not a flat fill, licensed/distinctive type, authored motion.
 Re-read the design law start-to-finish before building it.
 
+Type decision, settled 2026-09-02 and unchanged: **Khand**, self-hosted from Fontshare,
+three weights. Tanker was rendered and REJECTED — its terminals are radiused and its bowls
+soft, which reads friendly where this page needs painted-on-steel. Array was rejected on a
+harder ground than taste: it is a dot-matrix face, and dots are what this page uses to mean
+"withheld", so a wordmark built from them would destroy the signal. Only Khand woff2 files
+are on disk; any note claiming Tanker ships is stale.
+
+Palette, settled 2026-09-04: the shadcn preset's own `mist` base colour, taken verbatim
+from the registry rather than hand-mixed, because every primitive in `components/ui` was
+designed against those steps. The preset also specifies `font: space-grotesk`, which is
+NOT taken — it is on the design law's reject list by name.
+
 ## Reminders
 - The whole path works locally: compile → deploy → checkSolvency → read verdict, plus a
-  demonstrated in-circuit rejection. Next milestone is `preview` testnet, then the web skin.
+  demonstrated in-circuit rejection. Next milestone is `preview` testnet.
+- **State lives in `~/.config/freeboard`, not the repo** (2026-09-05). `FREEBOARD_HOME`
+  overrides it; `XDG_CONFIG_HOME/freeboard` is checked between the two. `npm run clean`
+  removes build artifacts only — deleting state is `FREEBOARD_CLEAN_CONFIRM=1 npm run
+  clean:state`, gated because the recovery phrase and the attester key are unrecoverable.
+  When this changed, the old repo-root `.midnight-attester.json` (the key deployment
+  `5ed65f0f…` was built with) became invisible to the CLI and had to be migrated by hand.
+  Check the state home before concluding a deployment is dead.
+- The recovery phrase is **never printed to stdout**. It goes to
+  `recovery-phrase.<network>.txt` at mode 0600 and the CLI prints the path.
 - The devnet is pinned to pre-release images upstream publishes no matrix for. If it breaks
   after any image bump, suspect the ledger patch version first ([[03-midnight-toolchain]]).
 - `.midnight-attester.json` is a SIGNING KEY (mode 0600, gitignored). Losing it means
   redeploying, since the contract has no rotation circuit.
 - **`npm run prime` after every `npm run deploy`.** A fresh devnet is a fresh chain, so the
   cached scenario records stop describing it; `GET /scenarios` will report a non-`current`
-  status and serve no records until it is re-run.
+  status and serve no records until it is re-run. The static landing page does NOT depend
+  on this — it bakes its reading at build time — but the dormant endpoints still do.
+- **The landing page's baked reading goes stale silently.** `web/lib/deployment.ts` holds a
+  contract address, genesis hash and block height from the 2026-09-02 chain, which no
+  longer exists (the devnet declares no volumes). The page says so in a caveat rather than
+  implying the chain is live. If you redeploy and want the page to describe the NEW chain,
+  that file has to be updated by hand — nothing checks it.
 - Deadline Wave 1: 2026-09-16.
-- The contract is the product; CLI comes with it; web is the demo skin.
+- The contract is the product; the CLI is the product's interface; web is a landing page
+  whose call to action is installing the CLI.

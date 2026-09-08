@@ -8,7 +8,7 @@
 // CLI describes what happens when you pass no flags, this describes the three
 // things the dashboard offers to show.
 
-import type { CheckInput } from './freeboard-client';
+import type { CheckInput } from './freeboard-client.js';
 
 export type ScenarioId = 'safe' | 'at-risk' | 'tampered';
 

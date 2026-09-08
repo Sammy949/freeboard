@@ -1,8 +1,14 @@
 {
   "compilerOptions": {
     "target": "ES2022",
-    "module": "ESNext",
-    "moduleResolution": "bundler",
+    // NodeNext, not "bundler": there is no bundler. `dist/` is loaded by Node's own
+    // ESM resolver, which requires a file extension on every relative import — so the
+    // compiler has to hold the source to that same rule rather than accept
+    // extensionless paths it will not rewrite. Every `from './x.js'` in src/ is
+    // deliberate; NodeNext is what makes forgetting one a compile error instead of a
+    // runtime ERR_MODULE_NOT_FOUND in a published package.
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
     "outDir": "./dist",
     "rootDir": "./src",
     "strict": true,
@@ -15,6 +21,9 @@
     "declarationMap": true,
     "sourceMap": true
   },
+  // scripts/ is dev-only (cache assertions, e2e, priming) and is not published, so it
+  // is typechecked by `npm run typecheck` via its own include rather than compiled
+  // into dist/.
   "include": ["src/**/*"],
   "exclude": ["node_modules", "dist", "contracts/managed"]
 }

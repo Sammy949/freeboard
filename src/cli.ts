@@ -20,6 +20,9 @@
  *   npm run cli -- --check --tamper          # demonstrate in-circuit rejection
  */
 import { WebSocket } from 'ws';
+import * as fs from 'node:fs';
+import * as path from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 // Presentation only. Neither of these touches the proving or submission path.
 // @clack/prompts owns the interaction and the structure (prompts, the verdict box,
@@ -39,9 +42,19 @@ import {
   updateSettings,
 } from '@clack/prompts';
 
-import { frameLines, TAGLINE, WORDMARK, WORDMARK_WIDTH } from './banner';
-import { resolveNetwork, getOrCreateWallet, formatWalletBackupNotice, isLocalDevnet } from './network';
-import { formatVerifyingKey } from './attester';
+import { frameLines, TAGLINE, WORDMARK, WORDMARK_WIDTH } from './banner.js';
+import {
+  assertInBounds,
+  FieldBoundError,
+  isTamperable,
+  MAX_TAMPERABLE_COLLATERAL,
+  parseBounded,
+  TAMPER_FACTOR,
+  type BoundedField,
+} from './bounds.js';
+import { stateHome } from './paths.js';
+import { resolveNetwork, getOrCreateWallet, formatWalletBackupNotice, isLocalDevnet } from './network.js';
+import { formatVerifyingKey } from './attester.js';
 import {
   connectFreeboard,
   localHealthFactor,
@@ -50,7 +63,7 @@ import {
   type FreeboardClient,
   type LedgerView,
   type StagedCheck,
-} from './freeboard-client';
+} from './freeboard-client.js';
 
 // Enable WebSocket for GraphQL subscriptions
 // @ts-expect-error Required for wallet sync
@@ -73,13 +86,28 @@ updateSettings({ withGuide: false });
  */
 const TTY = isTTY(process.stdout);
 
-const { network } = resolveNetwork();
-{
-  // Printed before anything else: a freshly generated mnemonic is the one thing
-  // here that cannot be recovered later.
-  const notice = formatWalletBackupNotice(getOrCreateWallet(network), network);
-  if (notice) console.log(notice);
-}
+/**
+ * The published version, read from the package manifest rather than duplicated here.
+ *
+ * A hardcoded string is a second source of truth that goes stale the first time
+ * `npm version` bumps the manifest and nobody remembers this file. Resolved relative
+ * to the compiled file's own location, so it works from `dist/` in a global install
+ * as well as from `src/` under tsx. Falls back rather than throwing: a missing
+ * manifest should not stop `--check` from running.
+ */
+const VERSION: string = (() => {
+  try {
+    const here = path.dirname(fileURLToPath(import.meta.url));
+    const manifest = path.resolve(here, '..', 'package.json');
+    const { version, name } = JSON.parse(fs.readFileSync(manifest, 'utf-8')) as {
+      version?: string;
+      name?: string;
+    };
+    return version ? `${name ?? 'freeboard'} ${version}` : 'version unknown';
+  } catch {
+    return 'version unknown';
+  }
+})();
 
 // ─── Display helpers ──────────────────────────────────────────────────────────
 
@@ -142,13 +170,17 @@ class CancelledError extends Error {
 }
 
 /**
- * Reads a non-negative integer.
+ * Reads a non-negative integer, bounded by the circuit's own field width.
  *
  * The cancel guard lives INSIDE this helper rather than at the call sites, because
  * clack returns a symbol on Ctrl-C and an unchecked symbol would flow straight into
  * `BigInt()`. One helper means a new prompt cannot forget the check.
+ *
+ * The bound is checked in the VALIDATOR, so an over-wide value is refused while the
+ * cursor is still in the field, with the circuit's real limit named. Catching it here
+ * rather than after signing is the whole point of src/bounds.ts.
  */
-async function askBigInt(label: string, fallback: bigint): Promise<bigint> {
+async function askBigInt(label: string, field: BoundedField, fallback: bigint): Promise<bigint> {
   const answer = await text({
     message: label,
     placeholder: String(fallback),
@@ -157,7 +189,16 @@ async function askBigInt(label: string, fallback: bigint): Promise<bigint> {
     // `v` is optional in clack's Validate signature: an untouched prompt hands the
     // validator undefined, which is the same case as empty and must pass, or the
     // default can never be accepted with a bare Enter.
-    validate: (v) => (!v || /^\d+$/.test(v) ? undefined : 'Whole non-negative numbers only.'),
+    validate: (v) => {
+      if (!v) return undefined;
+      if (!/^\d+$/.test(v)) return 'Whole non-negative numbers only.';
+      try {
+        assertInBounds(field, BigInt(v));
+      } catch (err) {
+        return err instanceof FieldBoundError ? err.message : String(err);
+      }
+      return undefined;
+    },
   });
   if (isCancel(answer)) throw new CancelledError();
   return BigInt(answer);
@@ -169,30 +210,68 @@ interface CliArgs {
   check: boolean;
   read: boolean;
   tamper: boolean;
+  help: boolean;
+  version: boolean;
   collateral?: bigint;
   debt?: bigint;
   threshold?: bigint;
   minHf?: bigint;
 }
 
+const USAGE = `
+  freeboard — prove a lending position is solvent without revealing it
+
+  USAGE
+    freeboard                          interactive menu
+    freeboard --read                   the verifier's view: verdict only
+    freeboard --check                  prove the default position, then report
+    freeboard --check --read           prove, then read the ledger back
+    freeboard --check --tamper         inflate after signing; the circuit refuses it
+
+  POSITION (all optional; require --check)
+    --collateral <n>    raw token units          default 1000000   max 2^64-1
+    --debt <n>          raw token units          default 400000    max 2^64-1
+    --threshold <n>     liquidation, bps         default 8500      max 65535
+    --min-hf <n>        verifier's bar, bps      default 15000     max 2^32-1
+
+  OTHER
+    --network <id>      undeployed | undeployed-l9 | preview | preprod
+    --help, -h          this text
+    --version, -V       print the version
+
+  Collateral, debt and threshold stay PRIVATE — they are witnesses to the circuit
+  and never reach the ledger. Only --min-hf is public.
+
+  State (wallet, attester key, sync cache) lives in ${'$FREEBOARD_HOME'} if set,
+  otherwise ${'$XDG_CONFIG_HOME'}/freeboard, otherwise ~/.config/freeboard.
+`;
+
 function parseArgs(argv: string[]): CliArgs {
-  const out: CliArgs = { check: false, read: false, tamper: false };
-  const num = (i: number, flag: string): bigint => {
+  const out: CliArgs = { check: false, read: false, tamper: false, help: false, version: false };
+  // Bounded at parse time, with the circuit's own limit in the message. The old
+  // version accepted any run of digits, so `--threshold 65536` got as far as a
+  // signed position and a printed health factor before the generated contract code
+  // refused it for a reason the user never saw.
+  const num = (i: number, flag: string, field: BoundedField): bigint => {
     const v = argv[i + 1];
-    if (v === undefined || !/^\d+$/.test(v)) {
-      throw new Error(`${flag} requires a whole non-negative number`);
+    if (v === undefined) throw new Error(`${flag} requires a whole non-negative number`);
+    try {
+      return parseBounded(field, v);
+    } catch (err) {
+      throw new Error(`${flag}: ${err instanceof Error ? err.message : String(err)}`);
     }
-    return BigInt(v);
   };
   for (let i = 2; i < argv.length; i++) {
     switch (argv[i]) {
       case '--check': out.check = true; break;
       case '--read': out.read = true; break;
       case '--tamper': out.tamper = true; break;
-      case '--collateral': out.collateral = num(i, '--collateral'); i++; break;
-      case '--debt': out.debt = num(i, '--debt'); i++; break;
-      case '--threshold': out.threshold = num(i, '--threshold'); i++; break;
-      case '--min-hf': out.minHf = num(i, '--min-hf'); i++; break;
+      case '--help': case '-h': out.help = true; break;
+      case '--version': case '-V': out.version = true; break;
+      case '--collateral': out.collateral = num(i, '--collateral', 'collateral'); i++; break;
+      case '--debt': out.debt = num(i, '--debt', 'debt'); i++; break;
+      case '--threshold': out.threshold = num(i, '--threshold', 'liquidationThresholdBps'); i++; break;
+      case '--min-hf': out.minHf = num(i, '--min-hf', 'minHealthFactorBps'); i++; break;
       // --network is consumed by resolveNetwork; skip it and its value.
       case '--network': i++; break;
       default:
@@ -205,7 +284,21 @@ function parseArgs(argv: string[]): CliArgs {
   }
   // Supplying position values without --check is a mistake worth naming rather
   // than silently dropping into the interactive menu.
-  if (!out.check && (out.collateral || out.debt || out.threshold || out.minHf || out.tamper)) {
+  //
+  // Tested for PRESENCE, not truthiness. `0n` is falsy, so the old `||` chain let
+  // `--collateral 0 --debt 0` through as if no flags had been passed — and `debt: 0`
+  // is a value the contract treats specially ("no borrow, i.e. an infinite health
+  // factor → trivially SAFE"), so it is one a user has real reason to type. In a
+  // pipe that silent fallthrough opened the interactive menu and then hit EOF on
+  // stdin during the wallet sync, which is the exact failure non-interactive mode
+  // exists to prevent.
+  const gaveValues =
+    out.collateral !== undefined ||
+    out.debt !== undefined ||
+    out.threshold !== undefined ||
+    out.minHf !== undefined ||
+    out.tamper;
+  if (!out.check && !out.help && !out.version && gaveValues) {
     throw new Error('position/tamper flags require --check');
   }
   return out;
@@ -273,7 +366,7 @@ async function runCheck(
   interactive: boolean,
   client: FreeboardClient,
   opts: CheckOptions = {},
-): Promise<void> {
+): Promise<boolean> {
   const p = opts.preset ?? {};
   // Defaults chosen so the out-of-the-box run is SAFE: HF = 1M×8500/400k = 2.125
   // against a 1.5 threshold.
@@ -282,10 +375,10 @@ async function runCheck(
   let collateral: bigint, debt: bigint, liquidationThresholdBps: bigint, minHealthFactorBps: bigint;
   if (interactive) {
     console.log(`\n  Enter the position (blank = default). These stay ${chalk.bold('PRIVATE')}.\n`);
-    collateral = await askBigInt('Collateral', p.collateral ?? DEFAULTS.collateral);
-    debt = await askBigInt('Debt', p.debt ?? DEFAULTS.debt);
-    liquidationThresholdBps = await askBigInt('Liquidation threshold (bps)', p.threshold ?? DEFAULTS.threshold);
-    minHealthFactorBps = await askBigInt('Verifier min health factor (bps, PUBLIC)', p.minHf ?? DEFAULTS.minHf);
+    collateral = await askBigInt('Collateral', 'collateral', p.collateral ?? DEFAULTS.collateral);
+    debt = await askBigInt('Debt', 'debt', p.debt ?? DEFAULTS.debt);
+    liquidationThresholdBps = await askBigInt('Liquidation threshold (bps)', 'liquidationThresholdBps', p.threshold ?? DEFAULTS.threshold);
+    minHealthFactorBps = await askBigInt('Verifier min health factor (bps, PUBLIC)', 'minHealthFactorBps', p.minHf ?? DEFAULTS.minHf);
   } else {
     collateral = p.collateral ?? DEFAULTS.collateral;
     debt = p.debt ?? DEFAULTS.debt;
@@ -295,6 +388,21 @@ async function runCheck(
       `\n  ${chalk.bold('Position (PRIVATE):')} ${info(`collateral=${collateral} debt=${debt} threshold=${liquidationThresholdBps}bps`)}`,
     );
     console.log(`  ${chalk.bold('Verifier threshold (PUBLIC):')} ${minHealthFactorBps}bps`);
+  }
+
+  // The tamper demo multiplies collateral by TAMPER_FACTOR after signing. If that
+  // product overflows Uint<64> the call fails on a FIELD WIDTH, not on the signature
+  // check it exists to demonstrate — the headline case failing for the wrong reason,
+  // with a message that names neither cause. Say so here instead, before anything is
+  // signed or paid for.
+  if (opts.tamper && !isTamperable(collateral)) {
+    warn(chalk.yellow.bold('Cannot run the tamper demo with this collateral.'));
+    console.log(chalk.yellow(`    --tamper inflates collateral ×${TAMPER_FACTOR} after signing, and`));
+    console.log(chalk.yellow(`    ${collateral} × ${TAMPER_FACTOR} overflows the circuit's Uint<64>.`));
+    console.log(chalk.yellow(`    The call would fail on the field width rather than on the signature`));
+    console.log(chalk.yellow(`    check, which is the opposite of what this demo shows.`));
+    console.log(info(`\n     Use a collateral at or below ${MAX_TAMPERABLE_COLLATERAL}.\n`));
+    return false;
   }
 
   console.log();
@@ -334,7 +442,7 @@ async function runCheck(
           warn('The indexer has not surfaced this check yet — a ledger read may lag behind it.');
         }
       }
-      break;
+      return true;
 
     case 'rejected-in-circuit':
       // A rejection here is the demo succeeding, so it is styled as a definite
@@ -345,13 +453,17 @@ async function runCheck(
       spin?.clear();
       console.log(`  🛑 ${chalk.red.bold('REJECTED IN-CIRCUIT: position is not signed by the registered attester.')}`);
       console.log(info('     No verdict was written. This is the anti-theater check working.\n'));
-      break;
+      // Success when it was ASKED for, failure when it was not. `--tamper` exists to
+      // produce this outcome, so exiting non-zero would call the demo working a
+      // failure; an unrequested rejection means the attester key does not match the
+      // deployment and nothing was written, which a script must be able to detect.
+      return staged.tampered;
 
     case 'failed':
       if (spin) spin.error(`Failed: ${result.message}`);
       else console.log(`  ${chalk.red(S_WARN)} ${chalk.red(`Failed: ${result.message}`)}`);
       console.log();
-      break;
+      return false;
   }
 }
 
@@ -359,6 +471,21 @@ async function runCheck(
 
 async function main() {
   const args = parseArgs(process.argv);
+
+  // --help and --version answer and leave. They come BEFORE anything that resolves a
+  // network, touches the state directory or creates a wallet — the old code generated
+  // a wallet and printed a recovery phrase at module load, so even `--help` (which
+  // then died on "unknown flag") had already minted an identity and leaked its phrase
+  // to stdout.
+  if (args.help) {
+    console.log(USAGE);
+    return;
+  }
+  if (args.version) {
+    console.log(VERSION);
+    return;
+  }
+
   // Non-interactive when a mode flag is present. readline is not merely unused
   // there — creating it would hold stdin open and the process would never exit.
   const interactive = !args.check && !args.read;
@@ -374,6 +501,16 @@ async function main() {
   console.log(chalk.dim(TAGLINE[0]));
   console.log(chalk.dim(TAGLINE[1]));
   console.log();
+
+  // The wallet is resolved HERE, after parsing, not at module load. On a public
+  // network this may generate one; `formatWalletBackupNotice` writes the recovery
+  // phrase to a 0600 file and returns a notice naming the path, so no secret reaches
+  // stdout. Local devnets use the fixed genesis seed and produce no notice at all.
+  const { network } = resolveNetwork();
+  {
+    const notice = formatWalletBackupNotice(getOrCreateWallet(network), network);
+    if (notice) console.log(notice);
+  }
 
   // No readline instance any more: clack owns stdin, and it opens and releases it per
   // prompt rather than holding it for the session. That removes the reason the old
@@ -407,12 +544,16 @@ async function main() {
 
           // The contract has no key-rotation circuit, so attestations only verify
           // against the key it was deployed with. Naming a mismatch here turns an
-          // otherwise baffling in-circuit rejection into an actionable message.
+          // otherwise baffling in-circuit rejection into an actionable message. The
+          // key file now lives in the state home rather than cwd, so the path is
+          // printed rather than named — "restore .midnight-attester.json" is not
+          // actionable if you do not know which directory it belongs in.
           if (attester.matchesDeployment === false) {
             warn(chalk.yellow.bold('The local attester key does NOT match the deployed contract.'));
             console.log(chalk.yellow('    Every check will be rejected in-circuit. The contract has no rotation'));
-            console.log(chalk.yellow('    circuit, so either restore the original .midnight-attester.json or'));
-            console.log(chalk.yellow(`    redeploy: npm run deploy -- --network ${network}\n`));
+            console.log(chalk.yellow('    circuit, so either restore the original key at'));
+            console.log(chalk.yellow(`      ${path.join(stateHome(), '.midnight-attester.json')}`));
+            console.log(chalk.yellow(`    or deploy again against this one (needs the repo: npm run deploy -- --network ${network}).\n`));
           }
           if (attester.created) {
             warn('A NEW attester key was just generated — see the warning above.');
@@ -465,6 +606,9 @@ async function main() {
         },
       },
     });
+    // Published to the signal handler as soon as it exists, so a Ctrl-C from here on
+    // closes the store instead of stranding the wallet cache. See installSignalHandlers.
+    activeClient = client;
 
     // The faucet notice belongs after the connect banner, but the balance it
     // depends on was already read during sync — no second query.
@@ -479,10 +623,16 @@ async function main() {
       // One-shot mode. --read before --check would show the pre-call state, which
       // is the less useful order, so a combined invocation reads AFTER checking.
       if (args.check) {
-        await runCheck(false, client, {
+        const succeeded = await runCheck(false, client, {
           tamper: args.tamper,
           preset: { collateral: args.collateral, debt: args.debt, threshold: args.threshold, minHf: args.minHf },
         });
+        // A check that failed — proof server down, no funds, an unrequested
+        // in-circuit rejection — used to exit 0, which makes the CLI unscriptable:
+        // a caller could not tell "verdict written" from "nothing happened".
+        // Interactive mode deliberately does not do this; there the outcome is on
+        // screen and the session continues.
+        if (!succeeded) process.exitCode = 1;
       }
       if (args.read) printLedger(await client.readLedger());
     } else {
@@ -547,14 +697,11 @@ async function main() {
       console.log();
       return;
     }
-    // Two failures are worth their own wording, because both are fixed by running
-    // one specific command rather than by debugging anything.
-    if (error instanceof ContractNotCompiledError) {
-      console.error(chalk.red.bold('\n❌ Contract not compiled!'), chalk.red('Run: npm run compile\n'));
-      process.exitCode = 1;
-      return;
-    }
-    if (error instanceof NoDeploymentError) {
+    // Two failures carry their own remedy text, and that text now depends on whether
+    // this is a checkout or an installed package — so it is printed from the error
+    // rather than restated here. The old version hardcoded "Run: npm run compile",
+    // which an installed CLI has no way to do.
+    if (error instanceof ContractNotCompiledError || error instanceof NoDeploymentError) {
       console.error(chalk.red(`\n${error.message}\n`));
       process.exitCode = 1;
       return;
@@ -568,8 +715,56 @@ async function main() {
     // cancelled prompt or any throw used to do — leaves the lock held, and the next
     // run cannot open the store at all.
     await client?.close();
+    activeClient = null;
   }
 }
+
+/**
+ * Close the store on a signal.
+ *
+ * `main`'s `finally` covers every path the JS engine controls, and a signal is not
+ * one of them: Node's default action for SIGINT/SIGTERM terminates the process, so
+ * the `finally` never runs. clack traps SIGINT while a prompt is open — which is why
+ * cancelling a prompt unwinds cleanly — but every `await` BETWEEN prompts is
+ * unguarded, and those are the long ones: the wallet sync (minutes on a cold store),
+ * the proving spinner (30-60s) and `waitForAttestation` (up to 15s).
+ *
+ * Interrupting there skipped `persistWalletState`, so the next run re-synced from
+ * seed. On a public network that is minutes of penalty for a Ctrl-C.
+ *
+ * The handler is installed once, reads the same `client` the `finally` does, and
+ * guards re-entry: a second Ctrl-C while the first is still closing exits hard rather
+ * than starting a second close over the same store handle. Mirrors the shutdown path
+ * in src/server.ts, which already did this.
+ */
+let activeClient: FreeboardClient | null = null;
+let shuttingDown = false;
+
+function installSignalHandlers(): void {
+  for (const signal of ['SIGINT', 'SIGTERM'] as const) {
+    process.on(signal, () => {
+      if (shuttingDown) {
+        // Second signal: the user means it. Leave immediately.
+        process.exit(130);
+      }
+      shuttingDown = true;
+      console.log(info(`\n  ${signal} — closing the private-state store...`));
+      void (async () => {
+        try {
+          await activeClient?.close();
+        } catch (err) {
+          process.stderr.write(
+            `  ⚠ unclean shutdown: ${err instanceof Error ? err.message : String(err)}\n`,
+          );
+        }
+        // 130 is the conventional code for "terminated by SIGINT".
+        process.exit(signal === 'SIGINT' ? 130 : 143);
+      })();
+    });
+  }
+}
+
+installSignalHandlers();
 
 main().catch((err) => {
   console.error(err);

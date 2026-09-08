@@ -8,12 +8,17 @@
 // The tampered scenario is NOT primed. The circuit rejects it, so nothing lands
 // on the ledger and there is no record to cache — it stays a live action.
 
-import { connectFreeboard, localHealthFactor, type FreeboardClient } from '../src/freeboard-client';
-import { fetchGenesisHash } from '../src/chain-identity';
-import { saveResults, type ResultsCache, type ScenarioRecord } from '../src/results-cache';
-import { CACHEABLE_SCENARIOS, type Scenario } from '../src/scenarios';
+import { connectFreeboard, localHealthFactor, type FreeboardClient } from '../src/freeboard-client.js';
+import { fetchGenesisHash } from '../src/chain-identity.js';
+import { saveResults, type ResultsCache, type ScenarioRecord } from '../src/results-cache.js';
+import { CACHEABLE_SCENARIOS, type Scenario } from '../src/scenarios.js';
 
-const out = (s: string): void => process.stdout.write(s);
+// Braced, not an expression body: `process.stdout.write` returns a boolean, and an
+// arrow that returns it does not satisfy `void`. Surfaced the moment scripts/ was
+// brought under the typechecker (tsconfig.check.json) — it had never been checked.
+const out = (s: string): void => {
+  process.stdout.write(s);
+};
 
 /**
  * The genesis hash the wallet already established, or one fresh RPC call.

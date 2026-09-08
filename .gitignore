@@ -4,7 +4,8 @@ npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
 
-# Build output
+# Build output. dist/ is gitignored but PUBLISHED — package.json's `files` ships it
+# and the prepack hook builds it, so a publish can never carry a stale one.
 dist/
 build/
 
@@ -14,8 +15,12 @@ build/
 .env.development.local
 .env.test.local
 .env.production.local
+.npmrc
 
-# Contract artifacts
+# Contract artifacts. NOT published-ignored: package.json's `files` allowlist SHIPS
+# contracts/managed/freeboard/ deliberately, because NodeZkConfigProvider reads the
+# prover keys from there at runtime and cli.js dynamically imports contract/index.js.
+# Gitignored (they are build output, ~844K) but required in the tarball.
 contracts/managed/
 
 # Deployment info
@@ -69,3 +74,11 @@ midnight-level-db/
 # Proved-once scenario results. Bound to one chain and one deployment, so it is
 # generated locally by `npm run prime` and never shared (see src/results-cache.ts).
 .midnight-results.json
+
+# Claude Code's per-project settings. Ignored by my global gitconfig too, but that
+# protects only this machine — and npm does not consult a global gitignore at all, so
+# `npm pack` shipped this file (326 permission entries naming absolute home paths and
+# localhost ports) until package.json grew a `files` allowlist. Named here so the
+# repo protects itself.
+.claude/settings.local.json
+.claude/settings.local.json.bak

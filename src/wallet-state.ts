@@ -26,7 +26,8 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 
-import type { NetworkId } from './network';
+import type { NetworkId } from './network.js';
+import { stateHome } from './paths.js';
 
 export const WALLET_STATE_DIR = '.midnight-wallet-state';
 export const WALLET_STATE_VERSION = 1 as const;
@@ -51,11 +52,14 @@ export interface WalletStateLoad {
 }
 
 export interface FsOptions {
+  /** Overrides the state directory outright. Absent means the resolved state home. */
   cwd?: string;
+  /** The environment `stateHome` reads its overrides from. See network.ts FsOptions. */
+  env?: NodeJS.ProcessEnv;
 }
 
 function networkDir(network: NetworkId, opts: FsOptions = {}): string {
-  return path.join(opts.cwd ?? process.cwd(), WALLET_STATE_DIR, network);
+  return path.join(opts.cwd ?? stateHome(opts.env), WALLET_STATE_DIR, network);
 }
 
 function statePath(network: NetworkId, kind: ChildKind, opts: FsOptions = {}): string {
@@ -67,9 +71,13 @@ function chainPath(network: NetworkId, opts: FsOptions = {}): string {
 }
 
 function atomicWrite(file: string, content: string): void {
-  fs.mkdirSync(path.dirname(file), { recursive: true });
+  // 0700 on the directories and 0600 on the file. These blobs are serialized wallet
+  // state — not a seed, but enough to reconstruct balances and history — and they now
+  // live under a shared per-user state home rather than a project directory, so the
+  // permissions have to say so rather than inherit the umask.
+  fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
   const tmp = `${file}.tmp-${process.pid}-${Date.now()}`;
-  fs.writeFileSync(tmp, content);
+  fs.writeFileSync(tmp, content, { mode: 0o600 });
   fs.renameSync(tmp, file);
 }
 

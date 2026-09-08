@@ -14,7 +14,7 @@
 
 import type { JubjubSchnorrSignature } from '@midnight-ntwrk/compact-runtime';
 
-import type { Position } from './attester';
+import type { Position } from './attester.js';
 
 /** What the circuit needs for one `checkSolvency` call. */
 export interface AttestedPosition {

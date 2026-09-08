@@ -33,7 +33,7 @@
 
 import * as http from 'node:http';
 
-import { fetchGenesisHash } from './chain-identity';
+import { fetchGenesisHash } from './chain-identity.js';
 import {
   connectFreeboard,
   type CheckInput,
@@ -41,10 +41,10 @@ import {
   type FreeboardClient,
   type LedgerView,
   type StagedCheck,
-} from './freeboard-client';
-import { getDeployment, resolveNetwork } from './network';
-import { loadResults, type ScenarioRecord } from './results-cache';
-import { SCENARIOS } from './scenarios';
+} from './freeboard-client.js';
+import { getDeployment, resolveNetwork } from './network.js';
+import { loadResults, type ScenarioRecord } from './results-cache.js';
+import { SCENARIOS } from './scenarios.js';
 
 const HOST = '127.0.0.1';
 const PORT = Number(process.env.FREEBOARD_PORT ?? 4310);

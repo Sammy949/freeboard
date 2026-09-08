@@ -26,8 +26,8 @@ import {
   UnshieldedWallet,
 } from '@midnight-ntwrk/wallet-sdk';
 
-import { fetchGenesisHash } from './chain-identity';
-import type { NetworkConfig, NetworkId } from './network';
+import { fetchGenesisHash } from './chain-identity.js';
+import type { NetworkConfig, NetworkId } from './network.js';
 import {
   CHILD_KINDS,
   clearWalletState,
@@ -36,7 +36,7 @@ import {
   type ChildKind,
   type DiscardReason,
   type PersistedWalletState,
-} from './wallet-state';
+} from './wallet-state.js';
 
 export { unshieldedToken };
 export type { PersistedWalletState };
@@ -46,7 +46,7 @@ export {
   clearWalletState,
   WALLET_STATE_DIR,
   WALLET_STATE_VERSION,
-} from './wallet-state';
+} from './wallet-state.js';
 
 function deriveKeys(seed: string) {
   const hdWallet = HDWallet.fromSeed(Buffer.from(seed, 'hex'));

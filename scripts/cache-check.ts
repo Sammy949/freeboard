@@ -14,18 +14,18 @@ import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 
-import { displayWidth, frameLines, TAGLINE, WORDMARK, WORDMARK_WIDTH } from '../src/banner';
-import { toHttpRpcUrl } from '../src/chain-identity';
+import { displayWidth, frameLines, TAGLINE, WORDMARK, WORDMARK_WIDTH } from '../src/banner.js';
+import { toHttpRpcUrl } from '../src/chain-identity.js';
 import {
   clearResults,
   loadResults,
   RESULTS_FILE,
   saveResults,
   type ResultsCache,
-} from '../src/results-cache';
-import { CACHEABLE_SCENARIOS, SCENARIOS } from '../src/scenarios';
-import { persistWalletState, type WalletContext } from '../src/wallet';
-import { clearWalletState, loadWalletState, saveWalletState } from '../src/wallet-state';
+} from '../src/results-cache.js';
+import { CACHEABLE_SCENARIOS, SCENARIOS } from '../src/scenarios.js';
+import { persistWalletState, type WalletContext } from '../src/wallet.js';
+import { clearWalletState, loadWalletState, saveWalletState } from '../src/wallet-state.js';
 
 const A = `0x${'a'.repeat(64)}`;
 const B = `0x${'b'.repeat(64)}`;

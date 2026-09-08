@@ -14,9 +14,9 @@ import { httpClientProofProvider } from '@midnight-ntwrk/midnight-js-http-client
 import { indexerPublicDataProvider } from '@midnight-ntwrk/midnight-js-indexer-public-data-provider';
 import { levelPrivateStateProvider } from '@midnight-ntwrk/midnight-js-level-private-state-provider';
 import { NodeZkConfigProvider } from '@midnight-ntwrk/midnight-js-node-zk-config-provider';
-import { resolveNetwork, getOrCreateWallet, formatWalletBackupNotice, getDeployment } from '../src/network';
-import { createWallet, persistWalletState } from '../src/wallet';
-import { deployTimeWitnesses } from '../src/witnesses';
+import { resolveNetwork, getOrCreateWallet, formatWalletBackupNotice, getDeployment } from '../src/network.js';
+import { createWallet, persistWalletState } from '../src/wallet.js';
+import { deployTimeWitnesses } from '../src/witnesses.js';
 import { CompiledContract } from '@midnight-ntwrk/midnight-js-protocol/compact-js';
 
 // @ts-expect-error wallet sync requires WebSocket

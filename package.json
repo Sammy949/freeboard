@@ -1,19 +1,57 @@
 {
-  "name": "freeboard",
+  "//name": [
+    "`freeboard` was taken in 2016 by an unrelated IOT dashboard (buglabs, still at",
+    "1.0.2), so the package is `freeboard-cli` and the BIN stays `freeboard`. npm's",
+    "getBinFromManifest uses the sole bin whatever it is called, so `npx freeboard-cli`",
+    "runs it and a global install puts `freeboard` on PATH, which is what the docs,",
+    "the landing page and the CLI's own examples all say."
+  ],
+  "name": "freeboard-cli",
   "version": "1.0.0",
   "type": "module",
   "description": "Prove a DeFi position is solvent without revealing it — zero-knowledge solvency proofs on Midnight",
-  "author": "",
+  "author": "SamY",
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Sammy949/freeboard.git"
+  },
+  "homepage": "https://github.com/Sammy949/freeboard#readme",
+  "bugs": {
+    "url": "https://github.com/Sammy949/freeboard/issues"
+  },
+  "bin": {
+    "freeboard": "./bin/freeboard.mjs"
+  },
+  "//files": [
+    "An ALLOWLIST, not an ignore list. npm previously fell back to .gitignore (it",
+    "warned) and shipped all 123 tracked files: .claude/settings.local.json with 326",
+    "permission entries naming absolute home paths and localhost ports, the whole",
+    "notes/ roadmap, the entire web/ app, both compose files. Meanwhile it EXCLUDED",
+    "contracts/managed/ — which .gitignore drops but the runtime requires, since",
+    "NodeZkConfigProvider reads the prover keys from there and cli.js dynamically",
+    "imports contract/index.js. So the published package was simultaneously too big",
+    "and missing the one thing it could not run without.",
+    "contracts/managed is ~844K, which is fine for npm."
+  ],
+  "files": [
+    "bin/",
+    "dist/",
+    "contracts/freeboard.compact",
+    "contracts/managed/freeboard/",
+    "README.md",
+    "LICENSE"
+  ],
   "scripts": {
     "compile": "compact compile contracts/freeboard.compact contracts/managed/freeboard",
-    "build": "npx tsc --noEmit || true",
-    "setup": "npx tsx src/setup.ts",
-    "deploy": "npx tsx src/deploy.ts",
-    "cli": "npx tsx src/cli.ts",
-    "serve": "npx tsx src/server.ts",
-    "prime": "tsx scripts/prime-results.ts",
-    "check-balance": "npx tsx src/check-balance.ts",
+    "build": "rm -rf dist && tsc",
+    "typecheck": "tsc -p tsconfig.check.json",
+    "setup": "npx tsx --import ./bin/register-fetch.mjs src/setup.ts",
+    "deploy": "npx tsx --import ./bin/register-fetch.mjs src/deploy.ts",
+    "cli": "npx tsx --import ./bin/register-fetch.mjs src/cli.ts",
+    "serve": "npx tsx --import ./bin/register-fetch.mjs src/server.ts",
+    "prime": "npx tsx --import ./bin/register-fetch.mjs scripts/prime-results.ts",
+    "check-balance": "npx tsx --import ./bin/register-fetch.mjs src/check-balance.ts",
     "network": "npx tsx src/network.ts",
     "devnet:start": "docker compose -f docker-compose.ledger9.yml up -d --wait",
     "devnet:stop": "docker compose -f docker-compose.ledger9.yml down",
@@ -22,10 +60,15 @@
     "devnet:stop-all": "docker compose -f docker-compose.ledger9.yml down; docker compose -f docker-compose.yml down",
     "devnet8:start": "docker compose -f docker-compose.yml up -d --wait",
     "devnet8:stop": "docker compose -f docker-compose.yml down",
-    "clean": "rm -rf contracts/managed .midnight-state.json .midnight-attester.json .midnight-results.json .midnight-wallet-state midnight-level-db",
+    "//clean": "Build artifacts only. State moved out of the repo into the per-user state home (see src/paths.ts), so a wildcard rm here would silently miss it — and a wildcard rm THERE would delete a wallet and an attester key, which is not something a script called `clean` should do without being asked. `clean:state` is the explicit one.",
+    "clean": "rm -rf contracts/managed dist",
+    "clean:state": "npx tsx src/clean-state.ts",
     "test": "npm run test:cache",
     "test:cache": "tsx scripts/cache-check.ts",
-    "test:e2e": "tsx scripts/e2e-check.ts"
+    "test:e2e": "npx tsx --import ./bin/register-fetch.mjs scripts/e2e-check.ts",
+    "//prepack": "The published package runs from dist/, so a publish without a build ships a stale or absent one. prepack runs on `npm pack` and `npm publish` (not on install), which makes that unreachable rather than merely documented.",
+    "prepack": "npm run build",
+    "//scripts-hook": "Every entry point that reaches the Midnight SDK runs tsx with --import ./bin/register-fetch.mjs, which is the same cross-fetch redirect the published `freeboard` bin installs. `network` and `test:cache` are pure fs and do not need it."
   },
   "dependencies": {
     "@clack/prompts": "1.7.0",
@@ -40,9 +83,9 @@
     "@midnight-ntwrk/midnight-js-types": "5.0.0-beta.7",
     "@midnight-ntwrk/midnight-js-utils": "5.0.0-beta.7",
     "@midnight-ntwrk/wallet-sdk": "2.0.0-beta.2",
+    "@midnight-ntwrk/wallet-sdk-utilities": "1.2.1",
     "@scure/bip39": "2.2.0",
     "chalk": "6.0.0",
-    "cross-fetch-real": "npm:cross-fetch@4.1.0",
     "fast-string-width": "3.0.2",
     "rxjs": "^7.8.2",
     "ws": "^8.21.1"
@@ -56,10 +99,24 @@
   "engines": {
     "node": ">=22.0.0"
   },
-  "overrides": {
-    "@midnight-ntwrk/wallet-sdk-utilities": "1.2.1",
-    "cross-fetch": "file:./patches/cross-fetch"
-  },
+  "//dependencies": [
+    "WHY @midnight-ntwrk/wallet-sdk-utilities IS A DIRECT DEPENDENCY, not an override.",
+    "wallet-sdk-facade does `import { Clock } from '@midnight-ntwrk/wallet-sdk-utilities'`,",
+    "wallet-sdk declares 1.2.0, and 1.2.0 ships no Clock module — importing the SDK barrel",
+    "dies at module load. That was fixed with an `overrides` entry, which npm honours only",
+    "in a root project, so every consumer of this package got the broken resolution back.",
+    "Verified: a fresh install of wallet-sdk alone resolves 1.2.0 and throws \"does not",
+    "provide an export named 'Clock'\"; the direct dependency hoists 1.2.1 and the barrel",
+    "imports cleanly.",
+    "",
+    "THIS NOTE LIVES AT THE TOP LEVEL, NOT INSIDE `dependencies`. It used to sit in there",
+    "as a `//`-prefixed key. npm reads EVERY key of `dependencies` as a package name, so",
+    "that turned the prose into a spec and any install of the published tarball died with",
+    "EINVALIDPACKAGENAME — invisible in this repo, because installing the project itself",
+    "never resolves it. Comment keys are safe at the top level and inside `scripts`; they",
+    "are not safe inside a dependency map."
+  ],
+  "//overrides": "cross-fetch is gone from here. A `file:` override cannot survive publish, and the reason it existed is now handled inside the process: bin/freeboard.mjs registers a loader hook that resolves cross-fetch to bin/cross-fetch-shim.cjs, which delegates to Node's built-in fetch. See that file for the measurements.",
   "keywords": [
     "midnight",
     "blockchain",

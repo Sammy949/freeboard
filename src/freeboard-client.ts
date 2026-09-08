@@ -37,10 +37,11 @@ import {
   type DeploymentRecord,
   type NetworkConfig,
   type NetworkId,
-} from './network';
-import { createWallet, persistWalletState, unshieldedToken, type WalletContext } from './wallet';
-import { loadOrCreateAttesterKey, signPosition, verifyPosition, type Position } from './attester';
-import { freeboardWitnesses, type AttestedPosition } from './witnesses';
+} from './network.js';
+import { ensureStateHome, isInstalledPackage, privateStateDbPath } from './paths.js';
+import { createWallet, persistWalletState, unshieldedToken, type WalletContext } from './wallet.js';
+import { loadOrCreateAttesterKey, signPosition, verifyPosition, type Position } from './attester.js';
+import { freeboardWitnesses, type AttestedPosition } from './witnesses.js';
 
 // Must match the privateStateId used at deploy time, or a reconnect lands on a
 // different private-state store than the one the deployment registered.
@@ -53,7 +54,17 @@ const CONTRACT_ENTRY = path.join(ZK_CONFIG_PATH, 'contract', 'index.js');
 /** Thrown when the Compact output is missing, so callers can say "run compile". */
 export class ContractNotCompiledError extends Error {
   constructor() {
-    super(`Contract not compiled — no artifacts at ${path.relative(process.cwd(), CONTRACT_ENTRY)}. Run: npm run compile`);
+    // The remedy depends on how this was installed. `npm run compile` is right in a
+    // checkout and useless to someone who installed the CLI — they have no such
+    // script — so an installed package is told the artifacts are missing from the
+    // package itself, which is a packaging bug to report rather than anything they
+    // can fix locally.
+    super(
+      isInstalledPackage()
+        ? `Contract artifacts are missing from this installation (expected at ${CONTRACT_ENTRY}). ` +
+            'This is a packaging fault, not something to fix locally — please report it.'
+        : `Contract not compiled — no artifacts at ${path.relative(process.cwd(), CONTRACT_ENTRY)}. Run: npm run compile`,
+    );
     this.name = 'ContractNotCompiledError';
   }
 }
@@ -61,7 +72,13 @@ export class ContractNotCompiledError extends Error {
 /** Thrown when the requested network has no deployment on file. */
 export class NoDeploymentError extends Error {
   constructor(public readonly network: NetworkId) {
-    super(`No deploy on file for network ${network}. Run \`npm run setup -- --network ${network}\` first.`);
+    super(
+      isInstalledPackage()
+        ? `No deploy on file for network ${network}. Freeboard needs a deployed contract, and ` +
+            'deploying one needs the Compact compiler and a running devnet — both of which live in ' +
+            'the repo, not in this package. See https://github.com/Sammy949/freeboard#quick-start.'
+        : `No deploy on file for network ${network}. Run \`npm run setup -- --network ${network}\` first.`,
+    );
     this.name = 'NoDeploymentError';
   }
 }
@@ -144,8 +161,21 @@ export function createFreeboardProviders(networkConfig: NetworkConfig, walletCtx
   const zkConfigProvider = new NodeZkConfigProvider(ZK_CONFIG_PATH);
   const accountId = walletCtx.unshieldedKeystore.getBech32Address().toString();
 
+  // The store goes in the state home, not cwd. The SDK defaults `midnightDbName` to
+  // 'midnight-level-db' RELATIVE TO CWD, which for a globally installed CLI means the
+  // private-state store lands in whatever directory you happened to run from — a new
+  // empty store per directory, and private-state material scattered across the disk.
+  //
+  // Note the name is NOT the same knob as `privateStateStoreName`: that names a
+  // sublevel INSIDE the database. Measured — a probe passing
+  // `privateStateStoreName: 'locktest-state'` still wrote its keys into the same
+  // `midnight-level-db` directory, alongside the freeboard ones. `midnightDbName` is
+  // the one that moves the directory.
+  ensureStateHome();
+
   return {
     privateStateProvider: levelPrivateStateProvider({
+      midnightDbName: privateStateDbPath(),
       privateStateStoreName: 'freeboard-state',
       accountId,
       privateStoragePasswordProvider: () => privateStatePassword,

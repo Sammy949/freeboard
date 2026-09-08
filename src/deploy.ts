@@ -6,10 +6,11 @@
  */
 import * as fs from 'node:fs';
 import * as path from 'node:path';
-import { resolveNetwork, getOrCreateWallet, formatWalletBackupNotice, recordDeployment, isLocalDevnet } from './network';
-import { createWallet, persistWalletState, unshieldedToken, type WalletContext } from './wallet';
-import { loadOrCreateAttesterKey, formatVerifyingKey } from './attester';
-import { deployTimeWitnesses } from './witnesses';
+import { resolveNetwork, getOrCreateWallet, formatWalletBackupNotice, recordDeployment, isLocalDevnet } from './network.js';
+import { ensureStateHome, privateStateDbPath } from './paths.js';
+import { createWallet, persistWalletState, unshieldedToken, type WalletContext } from './wallet.js';
+import { loadOrCreateAttesterKey, formatVerifyingKey } from './attester.js';
+import { deployTimeWitnesses } from './witnesses.js';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { WebSocket } from 'ws';
 import * as Rx from 'rxjs';
@@ -132,8 +133,14 @@ async function createProviders(walletCtx: WalletContext) {
   const zkConfigProvider = new NodeZkConfigProvider(zkConfigPath);
   const accountId = walletCtx.unshieldedKeystore.getBech32Address().toString();
 
+  // Same store the CLI opens — see the note in freeboard-client.ts. If these two
+  // disagree the CLI reconnects to a DIFFERENT private-state store than the one the
+  // deployment registered, which is the failure PRIVATE_STATE_ID exists to prevent.
+  ensureStateHome();
+
   return {
     privateStateProvider: levelPrivateStateProvider({
+      midnightDbName: privateStateDbPath(),
       privateStateStoreName: 'freeboard-state',
       accountId,
       privateStoragePasswordProvider: () => privateStatePassword,

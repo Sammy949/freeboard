@@ -11,6 +11,8 @@ import { fileURLToPath } from 'node:url';
 import { generateMnemonic, mnemonicToSeedSync, validateMnemonic } from '@scure/bip39';
 import { wordlist } from '@scure/bip39/wordlists/english.js';
 
+import { ensureStateHome, recoveryPhrasePath, stateHome } from './paths.js';
+
 // Network keys. `undeployed` and `undeployed-l9` are BOTH local devnets and
 // both speak the 'undeployed' protocol network id — they differ only in which
 // ledger version the chain runs, and therefore in ports and compose file. They
@@ -138,11 +140,25 @@ export function isNetworkId(v: unknown): v is NetworkId {
 }
 
 export interface FsOptions {
+  /**
+   * Overrides the state directory outright. Absent means "the resolved state home"
+   * — see paths.ts. Kept as an explicit escape hatch for tests and for callers that
+   * genuinely own a directory.
+   */
   cwd?: string;
+  /**
+   * The environment `stateHome` reads FREEBOARD_HOME/XDG_CONFIG_HOME from. Threaded
+   * rather than left to `process.env` because a caller passing a synthetic env must
+   * get a synthetic home: without this, `getOrCreateWallet(net, { env })` resolved
+   * the phrase file from `env` but the STATE FILE from the real process env, so a
+   * test writing to a temp home silently created a real wallet in ~/.config. That
+   * happened once, during this refactor, which is why the parameter exists.
+   */
+  env?: NodeJS.ProcessEnv;
 }
 
 function statePath(opts: FsOptions = {}): string {
-  return path.join(opts.cwd ?? process.cwd(), STATE_FILE_NAME);
+  return path.join(opts.cwd ?? stateHome(opts.env), STATE_FILE_NAME);
 }
 
 export function loadState(opts: FsOptions = {}): NetworkState | null {
@@ -174,6 +190,11 @@ export function loadState(opts: FsOptions = {}): NetworkState | null {
 
 export function saveState(state: NetworkState, opts: FsOptions = {}): void {
   const p = statePath(opts);
+  // The state directory holds a seed and a recovery phrase, so it is created 0700
+  // before anything lands in it. Only needed when writing to the default home; an
+  // explicit cwd is the caller's to prepare.
+  if (opts.cwd === undefined) ensureStateHome(opts.env);
+  else fs.mkdirSync(path.dirname(p), { recursive: true });
   // Write to a sibling tmp file then rename → atomic on POSIX. Owner-only
   // mode: the file holds wallet secrets (seed + recovery phrase).
   const tmp = `${p}.tmp-${process.pid}-${Date.now()}`;
@@ -237,7 +258,7 @@ function applyEnvOverrides(base: NetworkConfig, env: NodeJS.ProcessEnv): Network
 export function resolveNetwork(opts: ResolveOptions = {}): ResolveResult {
   const argv = opts.argv ?? process.argv;
   const env = opts.env ?? process.env;
-  const cwd = opts.cwd ?? process.cwd();
+  const cwd = opts.cwd;
 
   const flag = parseNetworkFlag(argv);
   let network: NetworkId;
@@ -247,7 +268,7 @@ export function resolveNetwork(opts: ResolveOptions = {}): ResolveResult {
     network = flag;
     source = 'flag';
   } else {
-    const state = loadState({ cwd });
+    const state = loadState({ cwd, env });
     if (state) {
       network = state.activeNetwork;
       source = 'state';
@@ -316,7 +337,7 @@ export interface WalletCredentials {
 
 export function getOrCreateWallet(network: NetworkId, opts: SeedOptions = {}): WalletCredentials {
   const env = opts.env ?? process.env;
-  const cwd = opts.cwd ?? process.cwd();
+  const cwd = opts.cwd;
 
   if (isLocalDevnet(network)) return { seed: GENESIS_SEED, mnemonic: null, created: false };
 
@@ -349,7 +370,7 @@ export function getOrCreateWallet(network: NetworkId, opts: SeedOptions = {}): W
     return { seed: mnemonicToSeedHex(envMnemonic), mnemonic: normalizeMnemonic(envMnemonic), created: false };
   }
 
-  const existing = loadState({ cwd });
+  const existing = loadState({ cwd, env });
   const persisted = existing?.wallets?.[network];
   if (persisted?.seed) {
     // Legacy pre-mnemonic wallets have no phrase; their seed passes through untouched.
@@ -369,7 +390,7 @@ export function getOrCreateWallet(network: NetworkId, opts: SeedOptions = {}): W
     ...next.wallets,
     [network]: { seed, mnemonic, createdAt: new Date().toISOString() },
   };
-  saveState(next, { cwd });
+  saveState(next, { cwd, env });
   return { seed, mnemonic, created: true };
 }
 
@@ -379,24 +400,75 @@ export function getOrCreateSeed(network: NetworkId, opts: SeedOptions = {}): str
 }
 
 /**
+ * Write a freshly generated recovery phrase to a 0600 file, and return its path.
+ *
+ * WHY NOT STDOUT. A BIP-39 phrase controls the wallet outright. A published CLI's
+ * stdout gets piped into CI logs, `tee`d into files and screenshared, and a secret
+ * that lands there is a secret that has left the machine. So the phrase goes to a
+ * file only the owner can read, and the caller prints the PATH.
+ *
+ * Written with the `wx` flag: exclusive create, so this can never clobber an
+ * existing phrase file. A phrase is unrecoverable once lost, and silently
+ * overwriting one is the single most expensive thing this module could do.
+ * A collision means a previous run already wrote a phrase for this network, which
+ * is worth reporting rather than papering over.
+ */
+export function writeRecoveryPhrase(
+  mnemonic: string,
+  network: NetworkId,
+  opts: { env?: NodeJS.ProcessEnv } = {},
+): { path: string; written: boolean } {
+  const env = opts.env ?? process.env;
+  ensureStateHome(env);
+  const file = recoveryPhrasePath(network, env);
+  const body = [
+    `# Freeboard ${network} wallet recovery phrase`,
+    `# Generated ${new Date().toISOString()}`,
+    '#',
+    '# Anyone holding these 24 words controls this wallet. It also restores the',
+    '# same wallet in Lace. Move it somewhere safe and delete this file.',
+    '',
+    mnemonic,
+    '',
+  ].join('\n');
+
+  try {
+    fs.writeFileSync(file, body, { mode: 0o600, flag: 'wx' });
+    return { path: file, written: true };
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === 'EEXIST') return { path: file, written: false };
+    throw err;
+  }
+}
+
+/**
  * One-time backup notice for a freshly generated wallet; null otherwise.
- * Callers print this right after obtaining credentials.
+ *
+ * Names the two files and prints NEITHER secret. The phrase itself is in the file
+ * `writeRecoveryPhrase` created — see the note there on why it is not on stdout.
  */
 export function formatWalletBackupNotice(
   wallet: WalletCredentials,
   network: NetworkId,
+  opts: { env?: NodeJS.ProcessEnv } = {},
 ): string | null {
   if (!wallet.created || !wallet.mnemonic) return null;
-  return [
+  const env = opts.env ?? process.env;
+  const { path: phraseFile, written } = writeRecoveryPhrase(wallet.mnemonic, network, opts);
+  const lines = [
     '',
-    `  New ${network} wallet generated. Its 24-word recovery phrase:`,
+    `  A new ${network} wallet was generated.`,
     '',
-    `    ${wallet.mnemonic}`,
+    written
+      ? `  Its 24-word recovery phrase:  ${phraseFile}`
+      : `  A phrase file already existed and was NOT overwritten:  ${phraseFile}`,
+    `  The wallet itself:            ${path.join(stateHome(env), STATE_FILE_NAME)}`,
     '',
-    '  Write this phrase down — anyone holding it controls the wallet. It also',
-    `  restores the same wallet in Lace, and is saved to ${STATE_FILE_NAME} (gitignored).`,
+    '  Anyone holding those 24 words controls this wallet, and they restore it in',
+    '  Lace too. Move them somewhere safe, then delete the file.',
     '',
-  ].join('\n');
+  ];
+  return lines.join('\n');
 }
 
 export function getDeployment(network: NetworkId, opts: FsOptions = {}): DeploymentRecord | null {
@@ -410,7 +482,7 @@ export function recordDeployment(
   deployer: string,
   opts: FsOptions & { attesterVerifyingKey?: { x: string; y: string } } = {},
 ): void {
-  const cwd = opts.cwd ?? process.cwd();
+  const cwd = opts.cwd;
   const existing = loadState({ cwd });
   const next: NetworkState = existing ?? {
     version: STATE_VERSION,
@@ -431,7 +503,7 @@ export function recordDeployment(
 }
 
 export function setActiveNetwork(network: NetworkId, opts: FsOptions = {}): void {
-  const cwd = opts.cwd ?? process.cwd();
+  const cwd = opts.cwd;
   const existing = loadState({ cwd });
   if (existing && existing.activeNetwork === network) return; // no-op
   const next: NetworkState = existing ?? {
