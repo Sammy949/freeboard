@@ -524,6 +524,44 @@ reading like it started one service. Added `devnet:ps` and `devnet:stop-all`.
 
 ## Landing page — SHIPPED 2026-09-05, and the interactive demo is DEFERRED ON PURPOSE
 
+> **UPDATE 2026-09-09 — rebuilt, published, tracked.** The reasoning below still
+> stands unchanged; only the execution was replaced. The 2026-09-05 page was
+> discarded and rebuilt from a fresh `create-next-app`, the old `web/` was
+> deleted, and `web-v2/` took its name. `web/` is now **tracked in git** rather
+> than sitting untracked on disk.
+>
+> What the rebuild changed:
+> - **A full-bleed sky hero** from supplied footage. Three fixes were needed
+>   before it was usable: it does not loop (frame 119→0 measured 7.86/255 mean
+>   difference, larger than any 2s stretch, so it snapped every 4s — now
+>   forward+reverse, seam 0.49), it ran light-at-top which is the wrong end to
+>   meet a white page (flipped), and it banded (grain dithered in at encode).
+>   181KB webm, 1.1MB mp4 fallback, poster shown under `prefers-reduced-motion`.
+> - **Type: Zodiak 700 + Switzer**, both Fontshare. Khand and Pally were both
+>   tried and rejected on rendered evidence. See [[freeboard-landing-page-type-decision]] —
+>   `web/notes/landing-page-improvement.md` recommends Instrument, and that
+>   recommendation was deliberately overridden.
+> - **Palette derived from the footage**: every blue is hue 213.9° moved in value
+>   only. The old sky-700 accent (hue ~197) fought it.
+> - **A privacy-boundary figure** naming real declarations from
+>   `contracts/freeboard.compact`, including that `asOf` is a private witness the
+>   circuit deliberately discloses. A diagram that hid that would be false.
+> - **Fixed nav + bottom-sheet drawer** (vaul), rendering one shared item list so
+>   the two cannot drift. GitHub mark from `simple-icons`, since lucide ships no
+>   brand logos.
+> - **Full icon and metadata set**: favicon.ico, icon.svg, apple-icon,
+>   manifest, OG/Twitter card, robots, sitemap.
+> - **Copy is plain-language throughout.** Technical names survive only where
+>   they are real contract identifiers.
+>
+> Contrast is measured against rendered pixels across video frames, not against
+> tokens — that is how the install command was caught failing at 1.80:1 where a
+> bright cloud passes behind it.
+>
+> **Still not deployed.** The CLI is published (`freeboard-cli@1.0.0`, verified
+> by running `npx -y freeboard-cli@1.0.0 --version` from a clean directory), so
+> `npx freeboard-cli` on the page is now a real command.
+
 `web/` is now a **static single page**. `npm run build` in `web/` emits `○ /` as
 prerendered static content: no fetch, no `force-dynamic`, no service dependency. It can
 be deployed to a public URL today, which the previous version could never be.
