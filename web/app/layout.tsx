@@ -42,7 +42,7 @@ const switzer = localFont({
 
 const TITLE = "Freeboard: prove a position is solvent without revealing it";
 const DESCRIPTION =
-  "A command-line tool for zero-knowledge solvency proofs on Midnight. An oracle signs your position, a circuit checks it privately, and only a verdict reaches the chain.";
+  "Prove a crypto loan is nowhere near liquidation without revealing its size. Your figures stay on your computer; only the answer reaches the chain.";
 
 /**
  * The icons and the social card are NOT declared here. Next resolves them from

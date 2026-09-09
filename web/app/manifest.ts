@@ -14,7 +14,7 @@ export default function manifest(): MetadataRoute.Manifest {
     name: "Freeboard: zero-knowledge solvency proofs",
     short_name: "Freeboard",
     description:
-      "A command-line tool for zero-knowledge solvency proofs on Midnight. An oracle signs your position, a circuit checks it privately, and only a verdict reaches the chain.",
+      "Prove a crypto loan is nowhere near liquidation without revealing its size. Your figures stay on your computer; only the answer reaches the chain.",
     start_url: "/",
     display: "browser",
     background_color: "#ffffff",
