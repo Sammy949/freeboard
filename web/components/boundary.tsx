@@ -32,25 +32,24 @@ export function Boundary() {
       <div className="grid md:grid-cols-2">
         <Half
           title="Never leaves your machine"
-          sub="Private witnesses. The circuit consumes them; nothing emits them."
+          sub="These go into the proof and stop there. Nothing ever publishes them."
           fields={PRIVATE_FIELDS}
           tone="dark"
         />
         <Half
           title="What the chain holds"
-          sub="The entire public ledger. This is everything a verifier can read."
+          sub="Everything the chain stores. This is the whole list, not a summary."
           fields={PUBLIC_FIELDS}
           tone="light"
         />
       </div>
 
       <figcaption className="border-t border-line bg-surface px-6 py-5 text-[14px] leading-[1.6] text-muted sm:px-7">
-        <span className="font-medium text-ink">One field crosses.</span>{" "}
-        <code className="figures text-[13px] text-sky">asOf</code>, the attester&rsquo;s
-        observation stamp, is a private witness the circuit deliberately discloses to{" "}
-        <code className="figures text-[13px] text-sky">lastAttestationAt</code> so a
-        verifier can tell a fresh verdict from a stale one. It is inside the signed
-        payload, so it cannot be re-stamped, and it carries no position data.
+        <span className="font-medium text-ink">One thing crosses.</span> The moment the
+        oracle looked (<code className="figures text-[13px] text-sky">asOf</code>) is
+        published on purpose, so a lender can tell a fresh answer from a stale one. It
+        sits inside what the oracle signed, so it cannot be back-dated, and it says
+        nothing about the size of your loan.
       </figcaption>
     </figure>
   );

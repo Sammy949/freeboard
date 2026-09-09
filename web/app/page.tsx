@@ -10,6 +10,8 @@ import {
   CAPABILITIES,
   DEPLOYMENT,
   INSTALL_COMMAND,
+  NPM_URL,
+  PACKAGE_VERSION,
   REPO_URL,
 } from "@/lib/facts";
 import { CHECK_TRANSCRIPT } from "@/lib/transcript";
@@ -53,14 +55,31 @@ export default function Page() {
               terminal showing at the fold. */}
           <div className="flex min-h-[calc(100dvh-5.5rem)] flex-col pt-24">
             <div className="flex flex-1 flex-col items-center justify-center pb-10 text-center">
+              {/* The eyebrow. NOT the pill-with-an-icon: no capsule, no border, no
+                  status dot, no tracked caps. It carries a fact a reader can check
+                  in one click — the package is published and this is its version —
+                  which is the only thing that earns a line above a headline. The
+                  divider is the same rounded hairline the nav uses, so the piece
+                  belongs to a system rather than arriving on its own. */}
+              <a
+                href={NPM_URL}
+                className="focus-ring-light group mb-6 flex items-center gap-3 rounded text-[13px] md:mb-7"
+              >
+                <span className="figures font-medium text-white">v{PACKAGE_VERSION}</span>
+                <span aria-hidden className="h-3 w-px rounded-full bg-white/30" />
+                <span className="text-white/72 transition-colors group-hover:text-white">
+                  Live on npm
+                </span>
+              </a>
+
               <h1 className="font-display max-w-[17ch] text-[clamp(2.35rem,6.6vw,4.15rem)] leading-[1.03] font-bold tracking-[-0.025em] text-balance text-white">
                 Prove you have room to maneuver.
               </h1>
 
               <p className="mt-6 max-w-[100ch] text-[clamp(1rem,1.4vw,1.125rem)] leading-[1.6] text-balance text-white/82">
-                Show a lender your loan is nowhere near liquidation without
-                handing over the position. The numbers stay on your machine. One
-                bit reaches the chain.
+                A lender can confirm your loan is nowhere near liquidation without
+                ever seeing the loan. Your figures stay on your computer. Only the
+                answer reaches the chain.
               </p>
 
               <div id="install" className="mt-9 scroll-mt-28">
@@ -84,7 +103,7 @@ export default function Page() {
                 whether to care, so it belongs after the transcript, in ink, on
                 the page's own surface where it is simply readable. */}
             <p className="mt-5 text-center text-[13.5px] text-muted">
-              Requires Node 22 and a Midnight devnet.
+              Requires Node 22 and a local Midnight test network.
               <br />
               <a
                 href={`${REPO_URL}#quick-start`}
@@ -114,13 +133,13 @@ export default function Page() {
               is four sentences, not a wall. ── */}
           <section id="how-it-works" className="scroll-mt-28 py-16 md:py-24">
             <h2 className="font-display max-w-[20ch] text-[clamp(1.7rem,3.2vw,2.35rem)] leading-[1.12] font-bold tracking-[-0.02em]">
-              Nothing about your position leaves the machine it is on.
+              Your numbers never leave your computer.
             </h2>
             <p className="mt-5 max-w-[62ch] text-[16px] leading-[1.65] text-muted">
-              You supply the position locally. An attester signs it. The circuit checks
-              that signature before it computes anything, works out the health factor in
-              the private domain, and writes one verdict. A verifier reads the verdict and
-              has no way to reach what produced it.
+              You enter your loan figures on your own machine. An oracle signs them, so
+              they cannot be invented. The proof checks that signature first, works out
+              whether the loan is safe, and publishes one word. Anyone can read that word.
+              Nobody can work backwards from it to your numbers.
             </p>
 
             <div className="mt-10 md:mt-12">
@@ -168,18 +187,17 @@ export default function Page() {
             </h2>
 
             <div className="grid gap-y-8">
-              <Caveat title="The attester is a mock oracle">
-                Its signing key sits on the same machine as the prover, so the
-                in-circuit check proves the mechanism, not that any position is
-                real. Swapping in an independent attester needs no contract
-                change, which is the whole reason the check is in-circuit
-                already.
+              <Caveat title="The oracle is a stand-in">
+                Its signing key sits on the same machine as everything else, so the
+                check proves the mechanism works, not that any particular loan is
+                real. Putting an independent oracle in its place needs no change to
+                the contract, which is exactly why the check was built in from the
+                start.
               </Caveat>
-              <Caveat title="Local devnet only, so far">
-                The transcript above is a real run against a local ledger-9
-                chain. That chain declares no volumes, so it is already gone and
-                the address below is what it was. A public testnet is the next
-                milestone.
+              <Caveat title="One machine only, so far">
+                The output above is a real run against a test chain on one machine.
+                That chain keeps nothing between restarts, so it is already gone and
+                the address below is what it was. A public test network is next.
               </Caveat>
             </div>
           </section>
