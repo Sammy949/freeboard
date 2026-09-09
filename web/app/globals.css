@@ -1,0 +1,209 @@
+@import "tailwindcss";
+
+/* ─────────────────────────────────────────────────────────────────────────────
+   Freeboard — one sky, one blue.
+
+   THE PALETTE IS DERIVED FROM THE HERO FOOTAGE, not picked beside it. The sky
+   loop's deep band measures #1a72e4: hue 213.9°, saturation 80%, lightness 50%.
+   Every blue on this page is that hue moved in value only. So the accent under
+   the fold is literally the same colour as the atmosphere above it, and the page
+   reads as one surface rather than a video with a website bolted under it.
+
+   The previous accent was sky-700 (#0069a8) from this project's shadcn preset.
+   It is a cyan-leaning blue at hue ~197 and it fought the footage — two blues in
+   one view is the incoherence failure, not a palette. The footage wins because
+   it is the signature.
+
+   Contrast, measured, not assumed:
+     --ink    on --canvas  18.1:1
+     --muted  on --canvas   5.94:1
+     --sky    on --canvas   6.02:1  (and white on --sky is the same 6.02:1)
+   White text over the hero is checked against real rendered pixels, not against
+   these tokens — see the scrim note below.
+
+   One theme. No dark mode and no toggle: the brief is a white page under a sky.
+   ───────────────────────────────────────────────────────────────────────────── */
+
+@theme inline {
+  --color-canvas: var(--canvas);
+  --color-surface: var(--surface);
+  --color-ink: var(--ink);
+  --color-muted: var(--muted);
+  --color-line: var(--line);
+  --color-sky: var(--sky);
+  --color-sky-deep: var(--sky-deep);
+  --color-sky-wash: var(--sky-wash);
+  --color-sky-air: var(--sky-air);
+  --color-abyss: var(--abyss);
+
+  --font-display: var(--font-zodiak);
+  --font-sans: var(--font-switzer);
+  --font-mono: var(--font-figures);
+}
+
+:root {
+  --canvas: #ffffff;
+  /* Lifted out of the footage's pale band, not gray-100. The UI-kit neutral
+     would read as a wireframe left at its default; this belongs to the sky. */
+  --surface: #f4f8fe;
+  --ink: #141618;
+  /* The neutral is tinted to the same 214° so greys sit in the blue's family. */
+  --muted: #5c6570;
+  --line: #e4eaf3;
+
+  /* The accent: the footage's own hue, dropped in value until it clears AA on
+     white as text. Deep and tonal rather than poster-bright — a saturated
+     mid-blue splashed on type and fills is the tell, a deep one is a decision. */
+  --sky: #105fc6;
+  --sky-deep: #0d4a9b;
+  --sky-wash: #e8f0fd;
+  /* The exact pale band at the bottom edge of the flipped footage. This is the
+     colour the video hands off to the page, so the page starts here. */
+  --sky-air: #b2d7fe;
+  /* The scrim, and the terminal's ground. Same hue, near the floor. */
+  --abyss: #06244a;
+
+  --font-figures: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+}
+
+@layer base {
+  * {
+    border-color: var(--line);
+  }
+  /* Every in-page link glides rather than jumps. Gated: the reduced-motion block
+     at the foot of this file puts it back to `auto`, because a long smooth
+     scroll is exactly the kind of vestibular motion that setting exists for. */
+  html {
+    scroll-behavior: smooth;
+  }
+  body {
+    background: var(--canvas);
+    color: var(--ink);
+    font-family: var(--font-switzer), ui-sans-serif, system-ui, sans-serif;
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+  }
+  /* Figures are data: tabular so columns of numbers never jitter. */
+  .figures {
+    font-family: var(--font-figures);
+    font-variant-numeric: tabular-nums;
+    font-feature-settings: "tnum";
+  }
+  ::selection {
+    background: var(--sky-wash);
+    color: var(--ink);
+  }
+}
+
+@layer utilities {
+  /* The one focus treatment on the page. Two rings so it is visible on the
+     white page AND on the sky, where a single dark ring would vanish. */
+  .focus-ring {
+    outline: none;
+  }
+  .focus-ring:focus-visible {
+    box-shadow:
+      0 0 0 3px rgb(255 255 255 / 0.9),
+      0 0 0 5px var(--sky);
+  }
+  .focus-ring-light:focus-visible {
+    box-shadow:
+      0 0 0 3px rgb(6 36 74 / 0.55),
+      0 0 0 5px #ffffff;
+  }
+
+  /* ── The bottom feather ──────────────────────────────────────────────────
+     The footage is masked in its OWN pixels, not covered by a colour overlay.
+     An overlay leaves the image at full opacity underneath and the eye catches
+     the join; fading the image itself leaves nothing to seam against, because
+     what shows through is the page's own white.
+
+     Sixteen stops on a smootherstep curve across the bottom 42% of a section
+     that is taller than the viewport, so a full-opacity strip of sky survives
+     above the fade. Three stops or a short ramp still reads as a faint line. */
+  .sky-mask {
+    -webkit-mask-image: linear-gradient(
+      to bottom,
+      #000 0%,
+      #000 58%,
+      rgb(0 0 0 / 0.997) 60.8%,
+      rgb(0 0 0 / 0.981) 63.6%,
+      rgb(0 0 0 / 0.942) 66.4%,
+      rgb(0 0 0 / 0.878) 69.2%,
+      rgb(0 0 0 / 0.79) 72%,
+      rgb(0 0 0 / 0.683) 74.8%,
+      rgb(0 0 0 / 0.562) 77.6%,
+      rgb(0 0 0 / 0.438) 80.4%,
+      rgb(0 0 0 / 0.317) 83.2%,
+      rgb(0 0 0 / 0.21) 86%,
+      rgb(0 0 0 / 0.122) 88.8%,
+      rgb(0 0 0 / 0.058) 91.6%,
+      rgb(0 0 0 / 0.019) 94.4%,
+      rgb(0 0 0 / 0.003) 97.2%,
+      transparent 100%
+    );
+    mask-image: linear-gradient(
+      to bottom,
+      #000 0%,
+      #000 58%,
+      rgb(0 0 0 / 0.997) 60.8%,
+      rgb(0 0 0 / 0.981) 63.6%,
+      rgb(0 0 0 / 0.942) 66.4%,
+      rgb(0 0 0 / 0.878) 69.2%,
+      rgb(0 0 0 / 0.79) 72%,
+      rgb(0 0 0 / 0.683) 74.8%,
+      rgb(0 0 0 / 0.562) 77.6%,
+      rgb(0 0 0 / 0.438) 80.4%,
+      rgb(0 0 0 / 0.317) 83.2%,
+      rgb(0 0 0 / 0.21) 86%,
+      rgb(0 0 0 / 0.122) 88.8%,
+      rgb(0 0 0 / 0.058) 91.6%,
+      rgb(0 0 0 / 0.019) 94.4%,
+      rgb(0 0 0 / 0.003) 97.2%,
+      transparent 100%
+    );
+  }
+
+  /* Legibility for white type on moving footage. Deepens the sky's own blue at
+     the top rather than laying black over it, so the sky stays a sky. It is
+     fully transparent by 64% — long before the feather begins at 58%… they
+     overlap, which is the point: the darkening is gone before the image starts
+     to dissolve, so neither one ever terminates at an edge as a visible band. */
+  .sky-scrim {
+    background: linear-gradient(
+      to bottom,
+      rgb(6 36 74 / 0.46) 0%,
+      rgb(6 36 74 / 0.44) 20%,
+      rgb(6 36 74 / 0.38) 36%,
+      rgb(6 36 74 / 0.27) 50%,
+      rgb(6 36 74 / 0.13) 61%,
+      rgb(6 36 74 / 0.04) 68%,
+      transparent 74%
+    );
+  }
+
+  /* The hand-off. The white page opens in the footage's own pale band and
+     resolves to white over 40rem, so the colour carries across the boundary
+     instead of stopping at it. */
+  .sky-handoff {
+    background: linear-gradient(to bottom, var(--surface) 0%, var(--canvas) 40rem);
+  }
+}
+
+/* Motion is decorative here and the page must be complete without it. The
+   poster frame is painted by the container underneath, so removing the video
+   removes movement and nothing else. */
+@media (prefers-reduced-motion: reduce) {
+  .sky-motion {
+    display: none;
+  }
+  html {
+    scroll-behavior: auto;
+  }
+  *,
+  *::before,
+  *::after {
+    transition-duration: 0.01ms !important;
+    animation-duration: 0.01ms !important;
+  }
+}
