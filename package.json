@@ -7,7 +7,7 @@
     "the landing page and the CLI's own examples all say."
   ],
   "name": "freeboard-cli",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "type": "module",
   "description": "Prove a DeFi position is solvent without revealing it — zero-knowledge solvency proofs on Midnight",
   "author": "SamY",
