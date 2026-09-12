@@ -76,7 +76,7 @@ export class NoDeploymentError extends Error {
       isInstalledPackage()
         ? `No deploy on file for network ${network}. Freeboard needs a deployed contract, and ` +
             'deploying one needs the Compact compiler and a running devnet — both of which live in ' +
-            'the repo, not in this package. See https://github.com/Sammy949/freeboard#quick-start.'
+            'the repo, not in this package. See https://github.com/Sammy949/freeboard#try-it.'
         : `No deploy on file for network ${network}. Run \`npm run setup -- --network ${network}\` first.`,
     );
     this.name = 'NoDeploymentError';

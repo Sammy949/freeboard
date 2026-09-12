@@ -82,3 +82,4 @@ midnight-level-db/
 # repo protects itself.
 .claude/settings.local.json
 .claude/settings.local.json.bak
+.vercel
