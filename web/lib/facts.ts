@@ -26,7 +26,7 @@ export const REPO_URL = "https://github.com/Sammy949/freeboard";
  * This is the one number on the page that will go stale on the next publish.
  * It is here, alone, so there is exactly one place to change it.
  */
-export const PACKAGE_VERSION = "1.0.0";
+export const PACKAGE_VERSION = "1.0.1";
 export const NPM_URL = "https://www.npmjs.com/package/freeboard-cli";
 
 /**
