@@ -3,13 +3,15 @@
 **Prove your DeFi position is solvent without revealing it.**
 
 A lender, an OTC desk or a counterparty wants to know your loan is not about to
-be liquidated. Today the only way to show them is to hand over your position —
+be liquidated. Today the only way to show them is to hand over your position:
 collateral, debt, the whole book. Freeboard replaces that with a zero-knowledge
 proof on [Midnight](https://midnight.network): the circuit computes your
-Aave-style health factor privately and discloses exactly one bit — **SAFE** or
-**AT_RISK** — against a threshold the verifier chooses.
+Aave-style health factor privately and discloses exactly one bit (**SAFE** or
+**AT_RISK**) against a threshold the verifier chooses.
 
 The numbers never leave your machine. The verdict is all that goes on-chain.
+
+📄 **[Technical Proof of Work for Judges](docs/Freeboard%20-%20Technical%20Proof%20of%20Work%20for%20Judges.pdf)**
 
 ## Why this isn't security theater
 
@@ -21,7 +23,7 @@ So the position must arrive **signed by an attester**, and Freeboard verifies
 that signature *inside the circuit*, before the health-factor math runs. The
 verdict is therefore bound to a position an oracle actually observed. The
 attester's public key is fixed at deployment and there is deliberately no
-circuit to change it — an unauthenticated rotate would let a prover install
+circuit to change it: an unauthenticated rotate would let a prover install
 their own key and attest to their own numbers, which is the exact hole this
 closes.
 
@@ -34,7 +36,7 @@ re-stamped and replayed forward.
 
 Aave's health factor is `HF = (collateral × liquidationThreshold) / debt`.
 Compact is integer-only and division is to be avoided, so checking `HF ≥ T`
-becomes a cross-multiplication — with both sides in basis points the 10000s
+becomes a cross-multiplication. With both sides in basis points the 10000s
 cancel:
 
 ```
@@ -43,7 +45,7 @@ collateral × liquidationThresholdBps  ≥  minHealthFactorBps × debt
 
 No division, no precision loss. `debt == 0` is an infinite health factor, so
 trivially safe. The verdict enum is ordered `{ at_risk, safe }` so that the
-default ledger value of `0` means **at_risk** — you are at risk until a proof
+default ledger value of `0` means **at_risk**: you are at risk until a proof
 says otherwise.
 
 ## Status
@@ -59,7 +61,7 @@ Working end to end on a local ledger-9 devnet, as of 2026-08-29.
   with no verdict written.
 - ⚠️ **The attester is a mock oracle.** Its signing key lives on the same machine
   as the prover, so the check proves the *mechanism*, not that any position is
-  real. Replacing it with an independent attester needs no contract change —
+  real. Replacing it with an independent attester needs no contract change:
   that is why the check is in-circuit already. See `src/attester.ts`.
 - 🚧 **Not deployed to a public testnet, and no web UI yet.**
 
@@ -98,7 +100,7 @@ npm run deploy -- --network undeployed-l9
 npm run cli                          # interactive menu
 ```
 
-Or non-interactively — `--` passes the flags through npm to the CLI:
+Or non-interactively (`--` passes the flags through npm to the CLI):
 
 ```bash
 npm run cli -- --read            # the verifier's view: verdict only
@@ -130,7 +132,7 @@ Checks performed: 1
 ↳ note what is NOT here: no collateral, no debt, no threshold.
 ```
 
-And the tampered case — collateral inflated ×1000 *after* signing:
+And the tampered case (collateral inflated ×1000 *after* signing):
 
 ```
 ⚠ TAMPERING: inflating collateral ×1000 after signing.
@@ -154,7 +156,7 @@ failures worth knowing about if you rebuild this stack.
 ```
 freeboard/
 ├── contracts/
-│   └── freeboard.compact           # the contract — this is the product
+│   └── freeboard.compact           # the contract: this is the product
 ├── notes/                          # design + research, written as we go
 │   ├── 01-concept-and-pitch.md
 │   ├── 02-architecture.md
@@ -194,9 +196,9 @@ npm run test:e2e
 
 `npm run setup` runs end-to-end with no prompts:
 
-1. `docker compose -f <network's compose file> up -d --wait` — starts a local Midnight devnet (node, indexer, proof-server) and blocks until all three pass their healthchecks.
-2. `npm run compile` — compiles `contracts/freeboard.compact` to `contracts/managed/freeboard/`.
-3. `npm run deploy` — derives the genesis-seed wallet (NIGHT pre-minted), registers UTXOs for DUST generation, loads or generates the attester key, deploys the contract with that key as its constructor argument, writes the deploy record to `.midnight-state.json` in the state home (see **Where state lives**).
+1. `docker compose -f <network's compose file> up -d --wait` starts a local Midnight devnet (node, indexer, proof-server) and blocks until all three pass their healthchecks.
+2. `npm run compile` compiles `contracts/freeboard.compact` to `contracts/managed/freeboard/`.
+3. `npm run deploy` derives the genesis-seed wallet (NIGHT pre-minted), registers UTXOs for DUST generation, loads or generates the attester key, deploys the contract with that key as its constructor argument, writes the deploy record to `.midnight-state.json` in the state home (see **Where state lives**).
 
 `npm run test:e2e` reconnects to the deployed contract, reads its ledger state, and asserts the public state carries a verdict and no position data. Exits 0 on success.
 
@@ -227,12 +229,12 @@ State lives in container-managed volumes. `devnet:clean` (or `docker compose
 The deploy script uses a well-known genesis seed (`0000…0001`) so the
 pre-minted NIGHT in the `dev` chain preset is immediately available. **Do
 not use this seed against Preprod, mainnet, or any environment that
-handles real value** — anyone running this devnet has full access to
+handles real value**: anyone running this devnet has full access to
 funds at this seed.
 
 ## Networks
 
-Four networks. Note there are **two local devnets** — they run different ledger
+Four networks. Note there are **two local devnets**: they run different ledger
 versions, so which one you want depends on which compiler built your contract.
 
 | Network | When to use | Default? |
@@ -272,7 +274,7 @@ Everything Freeboard remembers sits in **one per-user directory**, not in the
 project:
 
 ```
-$FREEBOARD_HOME                 if set — the escape hatch, and how to run two
+$FREEBOARD_HOME                 if set: the escape hatch, and how to run two
                                 identities on one machine on purpose
 $XDG_CONFIG_HOME/freeboard      if XDG_CONFIG_HOME is set to an absolute path
 ~/.config/freeboard             otherwise
@@ -290,14 +292,14 @@ Inside it (directory `0700`, secrets `0600`):
 | `.midnight-results.json` | proved-once scenario records |
 
 These used to default to `process.cwd()`, which meant `freeboard` in `~/work`
-and `freeboard` in `~/tmp` were **different wallets** — each silently created,
+and `freeboard` in `~/tmp` were **different wallets**: each silently created,
 each printing its own recovery phrase. Fund one, run from the other, and the
 balance reads zero with no explanation. Per-user state fixes that and keeps the
 signing key out of whatever directory you happened to be in.
 
 `npm run clean` removes build artifacts only. Deleting state is
 `FREEBOARD_CLEAN_CONFIRM=1 npm run clean:state`, and the confirmation is
-required because the phrase and the attester key are unrecoverable — losing the
+required because the phrase and the attester key are unrecoverable: losing the
 latter means every existing deployment is dead, since the contract bakes the
 verifying key into its constructor and has no rotation circuit.
 
@@ -306,7 +308,7 @@ verifying key into its constructor and has no rotation circuit.
 - Both devnets use a hardcoded genesis seed, pre-funded by the `dev` preset.
 - `preview` and `preprod` generate a fresh wallet on first use: a 24-word
   BIP-39 recovery phrase plus its derived seed, stored in the state home
-  described above. The wallet survives switching networks — switch back later
+  described above. The wallet survives switching networks: switch back later
   and your funded wallet returns.
 - **The phrase is never printed to stdout.** It is written to
   `recovery-phrase.<network>.txt` (mode `0600`) and the CLI prints the *path*.
@@ -320,11 +322,11 @@ verifying key into its constructor and has no rotation circuit.
 
 ### Using the same wallet as Lace
 
-Seeds are derived with the standard BIP-39 `mnemonicToSeed` step — the same
-convention Lace uses — so identity is portable in both directions:
+Seeds are derived with the standard BIP-39 `mnemonicToSeed` step (the same
+convention Lace uses) so identity is portable in both directions:
 
 - **Bring your Lace wallet here**: pass your recovery phrase via the
-  `MIDNIGHT_WALLET_MNEMONIC` env var — the derived addresses match Lace.
+  `MIDNIGHT_WALLET_MNEMONIC` env var: the derived addresses match Lace.
   To keep the phrase out of your shell history, enter it with a hidden
   prompt instead of typing it inline:
 
@@ -353,17 +355,17 @@ Re-run `npm run setup -- --network preview` once the funds land.
 ### Environment overrides
 
 These env vars override the active network's config (no per-network
-suffix — they apply to whichever network is active for the run):
+suffix; they apply to whichever network is active for the run):
 
 | Variable | Effect |
 |---|---|
 | `MIDNIGHT_WALLET_SEED` | Use this hex seed (32-128 hex chars; a Lace-compatible BIP-39 seed is 128) instead of generating/persisting one. Useful for CI with a pre-funded wallet. |
-| `MIDNIGHT_WALLET_MNEMONIC` | Use this BIP-39 recovery phrase instead of generating a wallet — e.g. your Lace phrase, for the same addresses as Lace. Not persisted. Set only one of seed/mnemonic. |
+| `MIDNIGHT_WALLET_MNEMONIC` | Use this BIP-39 recovery phrase instead of generating a wallet (e.g. your Lace phrase, for the same addresses as Lace). Not persisted. Set only one of seed/mnemonic. |
 | `MIDNIGHT_INDEXER_URL` | Override the indexer GraphQL URL. |
 | `MIDNIGHT_INDEXER_WS_URL` | Override the indexer WS URL. |
 | `MIDNIGHT_NODE_URL` | Override the node RPC URL. |
 | `MIDNIGHT_FAUCET_URL` | Override the faucet URL printed during setup. |
-| `MIDNIGHT_PROOF_SERVER_URL` | Override the proof server URL — set to a public proof server (e.g. `https://lace-proof-pub.preview.midnight.network`) to skip running one locally. |
+| `MIDNIGHT_PROOF_SERVER_URL` | Override the proof server URL: set to a public proof server (e.g. `https://lace-proof-pub.preview.midnight.network`) to skip running one locally. |
 | `MIDNIGHT_FAUCET_TIMEOUT_MS` | Faucet poll budget in milliseconds (default 600000 = 10 min). |
 | `FREEBOARD_HOME` | Override the state directory outright (see **Where state lives**). The way to keep two isolated identities on one machine, and what the tests use. |
 | `XDG_CONFIG_HOME` | If absolute and `FREEBOARD_HOME` is unset, state goes in `$XDG_CONFIG_HOME/freeboard`. |
@@ -390,7 +392,7 @@ After each `deploy`, `cli`, or `check-balance` run, the scripts serialize the
 wallet's synced state to `.midnight-wallet-state/<network>/` inside the state
 home (see **Where state lives**).
 The next run on the same network restores from that snapshot and only catches
-up to the latest block instead of replaying from genesis — meaningful on
+up to the latest block instead of replaying from genesis: meaningful on
 `preview` / `preprod` where a from-seed sync takes minutes.
 
 If the cache is stale or corrupt (e.g. after an SDK upgrade with an
@@ -406,7 +408,7 @@ of the per-user state.
 | `npm run compile`       | Compile the Compact contract.                                  |
 | `npm run deploy`        | Deploy the compiled contract (requires devnet up + compiled).  |
 | `npm run cli`           | Run solvency checks / read verdicts. Interactive, or `--check` / `--read` / `--tamper` for one-shot. |
-| `npm run serve`         | Local HTTP service over the same client, for the web demo. **Loopback only, no auth** — it holds the attester signing key. One synced wallet per process; checks are serialized. |
+| `npm run serve`         | Local HTTP service over the same client, for the web demo. **Loopback only, no auth**: it holds the attester signing key. One synced wallet per process; checks are serialized. |
 | `npm run check-balance` | Print the genesis-seed wallet's NIGHT and DUST balances.       |
 | `npm run test:cache`    | Pure check on wallet-cache chain binding. No devnet needed.    |
 | `npm run test:e2e`      | Read-back check: contract is live, and its public state leaks no position. |
@@ -417,7 +419,7 @@ of the per-user state.
 | `npm run devnet:start` / `:stop` / `:clean` | Ledger-9 devnet lifecycle (`:clean` also drops volumes). |
 | `npm run devnet:ps`     | Show every freeboard container, both stacks, running or not.   |
 | `npm run devnet:stop-all` | Bring down both stacks. Use this if you are unsure what is up. |
-| `npm run devnet8:start` / `:stop` | Ledger-8 fallback stack. **Never run alongside the ledger-9 stack** — two nodes, two indexers and two proof servers will exhaust a typical dev machine. Was named `proof-server:start`, which implied it started only a proof server; it starts all three services. |
+| `npm run devnet8:start` / `:stop` | Ledger-8 fallback stack. **Never run alongside the ledger-9 stack**: two nodes, two indexers and two proof servers will exhaust a typical dev machine. Was named `proof-server:start`, which implied it started only a proof server; it starts all three services. |
 
 (See **Repo layout** near the top for the current structure.)
 
