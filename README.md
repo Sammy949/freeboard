@@ -11,7 +11,10 @@ Aave-style health factor privately and discloses exactly one bit (**SAFE** or
 
 The numbers never leave your machine. The verdict is all that goes on-chain.
 
-📄 **[Technical Proof of Work for Judges](docs/Freeboard%20-%20Technical%20Proof%20of%20Work%20for%20Judges.pdf)**
+## For Judges
+
+📄 **[Technical Proof of Work](docs/Freeboard%20-%20Technical%20Proof%20of%20Work%20for%20Judges.pdf)** — architecture, contract design, and security model  
+📊 **[Pitch Deck](docs/Freeboard%20-%20Pitch%20Deck.pdf)** — product vision and market positioning
 
 ## Why this isn't security theater
 
